@@ -27,6 +27,34 @@ func TestParseRecordsFromSampleMessage(t *testing.T) {
 	}
 }
 
+func TestCollectInputPathsForDirectory(t *testing.T) {
+	paths, err := collectInputPaths("data")
+	if err != nil {
+		t.Fatalf("collectInputPaths: %v", err)
+	}
+	if len(paths) != 5 {
+		t.Fatalf("expected 5 .msg paths, got %d", len(paths))
+	}
+	if filepath.Ext(paths[0]) != ".msg" {
+		t.Fatalf("expected .msg path, got %q", paths[0])
+	}
+}
+
+func TestParseInputPathsForDirectory(t *testing.T) {
+	paths, err := collectInputPaths("data")
+	if err != nil {
+		t.Fatalf("collectInputPaths: %v", err)
+	}
+
+	records, err := parseInputPaths(paths)
+	if err != nil {
+		t.Fatalf("parseInputPaths: %v", err)
+	}
+	if len(records) != 17 {
+		t.Fatalf("expected 17 records, got %d", len(records))
+	}
+}
+
 func TestParseDateFromSubject(t *testing.T) {
 	date := parseDateFromSubject("Medford Tags 01.07.26")
 	if date.IsZero() {

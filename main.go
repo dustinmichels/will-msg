@@ -45,12 +45,9 @@ type record struct {
 	SourceFile   string
 	Subject      string
 	MessageDate  string
-	From         string
-	To           string
-	CC           string
 	ReportedAt   string
 	Dispatcher   string
-	EntryIndex   int
+	RowInMessage int
 	RawEntry     string
 	LocationHint string
 	IssueType    string
@@ -61,16 +58,13 @@ type messageMetadata struct {
 	SourceFile  string
 	Subject     string
 	MessageDate time.Time
-	From        string
-	To          string
-	CC          string
 	Body        string
 }
 
 func main() {
 	log.SetFlags(0)
 
-	input := flag.String("input", "", "Path to the Outlook .msg file to parse")
+	input := flag.String("input", "", "Path to a .msg file or a directory of .msg files")
 	output := flag.String("output", "", "Path to the CSV file to write")
 	flag.Parse()
 
@@ -79,12 +73,15 @@ func main() {
 		os.Exit(2)
 	}
 
-	metadata, err := loadMessage(*input)
+	inputPaths, err := collectInputPaths(*input)
 	if err != nil {
-		log.Fatalf("load message: %v", err)
+		log.Fatalf("collect input paths: %v", err)
 	}
 
-	records := parseRecords(metadata)
+	records, err := parseInputPaths(inputPaths)
+	if err != nil {
+		log.Fatalf("parse inputs: %v", err)
+	}
 	if len(records) == 0 {
 		log.Fatalf("no structured rows found in %s", *input)
 	}
@@ -126,9 +123,6 @@ func loadMessage(path string) (messageMetadata, error) {
 		SourceFile:  filepath.Base(path),
 		Subject:     strings.TrimSpace(msg.Subject),
 		MessageDate: messageDate,
-		From:        strings.TrimSpace(msg.FromEmail),
-		To:          strings.TrimSpace(msg.To),
-		CC:          strings.TrimSpace(msg.CC),
 		Body:        body,
 	}, nil
 }
@@ -138,7 +132,7 @@ func parseRecords(meta messageMetadata) []record {
 	records := make([]record, 0)
 	var currentTime time.Time
 	var currentDispatcher string
-	entryIndex := 0
+	rowInMessage := 0
 
 	for _, line := range lines {
 		if isFooterLine(line) {
@@ -161,18 +155,15 @@ func parseRecords(meta messageMetadata) []record {
 			continue
 		}
 
-		entryIndex++
+		rowInMessage++
 		locationHint, issueType, issueTime := classifyEntry(line)
 		records = append(records, record{
 			SourceFile:   meta.SourceFile,
 			Subject:      meta.Subject,
 			MessageDate:  formatTime(meta.MessageDate),
-			From:         meta.From,
-			To:           meta.To,
-			CC:           meta.CC,
 			ReportedAt:   currentTime.Format(time.RFC3339),
 			Dispatcher:   currentDispatcher,
-			EntryIndex:   entryIndex,
+			RowInMessage: rowInMessage,
 			RawEntry:     line,
 			LocationHint: locationHint,
 			IssueType:    issueType,
@@ -181,6 +172,64 @@ func parseRecords(meta messageMetadata) []record {
 	}
 
 	return records
+}
+
+func collectInputPaths(input string) ([]string, error) {
+	info, err := os.Stat(input)
+	if err != nil {
+		return nil, err
+	}
+
+	if !info.IsDir() {
+		return []string{input}, nil
+	}
+
+	entries, err := os.ReadDir(input)
+	if err != nil {
+		return nil, err
+	}
+
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if strings.EqualFold(filepath.Ext(entry.Name()), ".msg") {
+			paths = append(paths, filepath.Join(input, entry.Name()))
+		}
+	}
+	if len(paths) == 0 {
+		return nil, fmt.Errorf("no .msg files found in %s", input)
+	}
+
+	return paths, nil
+}
+
+func parseInputPaths(paths []string) ([]record, error) {
+	allRecords := make([]record, 0)
+	isBatch := len(paths) > 1
+	for _, path := range paths {
+		metadata, err := loadMessage(path)
+		if err != nil {
+			if isBatch {
+				log.Printf("warning: skipping %s: %v", path, err)
+				continue
+			}
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+
+		records := parseRecords(metadata)
+		if len(records) == 0 {
+			if isBatch {
+				log.Printf("warning: skipping %s: no structured rows found", path)
+				continue
+			}
+			return nil, fmt.Errorf("%s: no structured rows found", path)
+		}
+		allRecords = append(allRecords, records...)
+	}
+
+	return allRecords, nil
 }
 
 func cleanLines(body string) []string {
@@ -259,12 +308,9 @@ func writeCSV(path string, records []record) error {
 		"source_file",
 		"subject",
 		"message_date",
-		"from",
-		"to",
-		"cc",
 		"reported_at",
 		"dispatcher",
-		"entry_index",
+		"row_in_message",
 		"raw_entry",
 		"location_hint",
 		"issue_type",
@@ -279,12 +325,9 @@ func writeCSV(path string, records []record) error {
 			rec.SourceFile,
 			rec.Subject,
 			rec.MessageDate,
-			rec.From,
-			rec.To,
-			rec.CC,
 			rec.ReportedAt,
 			rec.Dispatcher,
-			fmt.Sprintf("%d", rec.EntryIndex),
+			fmt.Sprintf("%d", rec.RowInMessage),
 			rec.RawEntry,
 			rec.LocationHint,
 			rec.IssueType,
