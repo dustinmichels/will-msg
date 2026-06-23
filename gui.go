@@ -7,9 +7,13 @@ import (
 	"image/color"
 	"io"
 	"log"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -232,6 +236,61 @@ func (c customTheme) Size(name fyne.ThemeSizeName) float32 {
 	return theme.DefaultTheme().Size(name)
 }
 
+func getDownloadsDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "."
+	}
+	downloadsDir := filepath.Join(home, "Downloads")
+	if _, err := os.Stat(downloadsDir); os.IsNotExist(err) {
+		return home
+	}
+	return downloadsDir
+}
+
+func revealFile(filePath string, a fyne.App) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", "-R", filePath)
+	case "windows":
+		cmd = exec.Command("explorer.exe", "/select,"+filePath)
+	case "linux":
+		// Try dbus show items first
+		fileURI := "file://" + filePath
+		cmd = exec.Command("dbus-send", "--session", "--dest=org.freedesktop.FileManager1", "/org/freedesktop/FileManager1", "org.freedesktop.FileManager1.ShowItems", "array:string:"+fileURI, "string:\"\"")
+		if err := cmd.Run(); err == nil {
+			return
+		}
+		// Fallback to xdg-open the parent directory
+		cmd = exec.Command("xdg-open", filepath.Dir(filePath))
+	default:
+		// Fallback to generic open folder
+		if dirURI := storage.NewFileURI(filepath.Dir(filePath)); dirURI != nil {
+			if u, err := url.Parse(dirURI.String()); err == nil {
+				_ = a.OpenURL(u)
+			}
+		}
+		return
+	}
+
+	if cmd != nil {
+		err := cmd.Run()
+		if err != nil {
+			// On Windows, explorer.exe /select exits with a non-zero code even on success.
+			// Only fallback if the error is not an ExitError (meaning explorer.exe couldn't launch).
+			if _, ok := err.(*exec.ExitError); !ok || runtime.GOOS != "windows" {
+				// Fallback to generic open folder
+				if dirURI := storage.NewFileURI(filepath.Dir(filePath)); dirURI != nil {
+					if u, err := url.Parse(dirURI.String()); err == nil {
+						_ = a.OpenURL(u)
+					}
+				}
+			}
+		}
+	}
+}
+
 func runGUI() {
 	a := app.New()
 	a.Settings().SetTheme(customTheme{})
@@ -316,6 +375,10 @@ func runGUI() {
 	downloadButton.Importance = widget.HighImportance
 	downloadButton.Disable()
 
+	saveAsButton := widget.NewButtonWithIcon("Save As...", theme.DocumentSaveIcon(), nil)
+	saveAsButton.Importance = widget.HighImportance
+	saveAsButton.Disable()
+
 	// Dialogs
 	fileOpenDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
 		if err != nil {
@@ -389,6 +452,7 @@ func runGUI() {
 	runButton.OnTapped = func() {
 		runButton.Disable()
 		downloadButton.Disable()
+		saveAsButton.Disable()
 		statusBar.SetText("Parsing .msg files... Please wait.")
 
 		go func() {
@@ -444,6 +508,7 @@ func runGUI() {
 				csvData = csvRows
 				previewTable.Refresh()
 				downloadButton.Enable()
+				saveAsButton.Enable()
 				statusBar.SetText(fmt.Sprintf("Successfully parsed %d records from %d files!", len(records), len(currentSources)))
 				runButton.Enable()
 			})
@@ -451,6 +516,55 @@ func runGUI() {
 	}
 
 	downloadButton.OnTapped = func() {
+		downloadsDir := getDownloadsDir()
+		datetime := time.Now().Format("2006-01-02_150405")
+		filename := fmt.Sprintf("msg_parsed_%s.csv", datetime)
+		filePath := filepath.Join(downloadsDir, filename)
+
+		file, err := os.Create(filePath)
+		if err != nil {
+			dialog.ShowError(err, w)
+			statusBar.SetText("Failed to save CSV automatically.")
+			return
+		}
+		defer file.Close()
+
+		csvWriter := csv.NewWriter(file)
+		err = csvWriter.WriteAll(csvData)
+		if err != nil {
+			dialog.ShowError(err, w)
+			statusBar.SetText("Failed to save CSV automatically.")
+			return
+		}
+		statusBar.SetText(fmt.Sprintf("CSV saved automatically to %s", filename))
+
+		// Show custom dialog with file name, directory, and action buttons to open/reveal
+		title := "CSV Saved Automatically"
+		msgLabel := widget.NewLabel("Your CSV has been automatically saved.")
+
+		fileInfo := widget.NewForm(
+			widget.NewFormItem("File Name:", widget.NewLabel(filename)),
+			widget.NewFormItem("Saved To:", widget.NewLabel(downloadsDir)),
+		)
+
+		showInFolderBtn := widget.NewButtonWithIcon("Show in Folder", theme.FolderOpenIcon(), func() {
+			revealFile(filePath, a)
+		})
+		showInFolderBtn.Importance = widget.HighImportance
+
+		dialogContent := container.NewVBox(
+			msgLabel,
+			fileInfo,
+			layout.NewSpacer(),
+			container.NewHBox(layout.NewSpacer(), showInFolderBtn, layout.NewSpacer()),
+		)
+
+		d := dialog.NewCustom(title, "OK", dialogContent, w)
+		d.Resize(fyne.NewSize(500, 200))
+		d.Show()
+	}
+
+	saveAsButton.OnTapped = func() {
 		fileSaveDialog := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
 			if err != nil {
 				dialog.ShowError(err, w)
@@ -470,7 +584,8 @@ func runGUI() {
 			}
 			statusBar.SetText("CSV saved successfully.")
 		}, w)
-		fileSaveDialog.SetFileName("parsed_emails.csv")
+		datetime := time.Now().Format("2006-01-02_150405")
+		fileSaveDialog.SetFileName(fmt.Sprintf("msg_parsed_%s.csv", datetime))
 		fileSaveDialog.SetFilter(storage.NewExtensionFileFilter([]string{".csv"}))
 		fileSaveDialog.Show()
 	}
@@ -594,6 +709,7 @@ func runGUI() {
 		fileCountLabel.SetText("Found 0 .msg files")
 		runButton.Disable()
 		downloadButton.Disable()
+		saveAsButton.Disable()
 		list.Refresh()
 		previewTable.Refresh()
 		showWelcome()
@@ -624,6 +740,7 @@ func runGUI() {
 			widget.NewLabelWithStyle("CSV Preview:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 			layout.NewSpacer(),
 			downloadButton,
+			saveAsButton,
 		),
 		nil,
 		nil,

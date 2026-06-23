@@ -268,3 +268,10 @@ func TestShouldIgnore(t *testing.T) {
 		}
 	}
 }
+
+func TestGetDownloadsDir(t *testing.T) {
+	dir := getDownloadsDir()
+	if dir == "" {
+		t.Error("expected non-empty downloads directory")
+	}
+}
