@@ -197,13 +197,13 @@ type customTheme struct {
 
 func (c customTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
 	if name == theme.ColorNamePrimary {
-		return color.NRGBA{R: 99, G: 102, B: 241, A: 255} // Modern Indigo
+		return color.NRGBA{R: 108, G: 185, B: 68, A: 255} // Truck green
 	}
 	if name == theme.ColorNameFocus {
-		return color.NRGBA{R: 139, G: 92, B: 246, A: 255} // Violet
+		return color.NRGBA{R: 85, G: 155, B: 50, A: 255} // Dark truck green
 	}
 	if name == theme.ColorNameSelection {
-		return color.NRGBA{R: 99, G: 102, B: 241, A: 80} // Soft selection overlay
+		return color.NRGBA{R: 108, G: 185, B: 68, A: 80} // Soft green overlay
 	}
 	if name == theme.ColorNameBackground {
 		if variant == theme.VariantDark {
@@ -215,13 +215,13 @@ func (c customTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) 
 		if variant == theme.VariantDark {
 			return color.NRGBA{R: 30, G: 41, B: 59, A: 255} // Slate-800
 		}
-		return color.NRGBA{R: 226, G: 232, B: 240, A: 255} // Slate-200
+		return color.NRGBA{R: 220, G: 237, B: 210, A: 255} // Soft green-tinted button
 	}
 	if name == theme.ColorNameInputBackground {
 		if variant == theme.VariantDark {
 			return color.NRGBA{R: 30, G: 41, B: 59, A: 255} // Slate-800
 		}
-		return color.NRGBA{R: 241, G: 245, B: 249, A: 255} // Slate-100
+		return color.NRGBA{R: 241, G: 248, B: 237, A: 255} // Soft green-tinted input
 	}
 	return c.Theme.Color(name, variant)
 }
@@ -452,7 +452,7 @@ func runGUI() {
 				if a.Settings().ThemeVariant() == theme.VariantDark {
 					bg.FillColor = color.NRGBA{R: 30, G: 41, B: 59, A: 255}
 				} else {
-					bg.FillColor = color.NRGBA{R: 224, G: 231, B: 255, A: 255}
+					bg.FillColor = color.NRGBA{R: 220, G: 245, B: 195, A: 255} // Light green table header
 				}
 			} else {
 				label.TextStyle = fyne.TextStyle{}
@@ -647,18 +647,23 @@ func runGUI() {
 		}()
 	}
 
-	headerBg := canvas.NewRectangle(color.NRGBA{R: 79, G: 70, B: 229, A: 255})
+	headerBg := canvas.NewRectangle(color.NRGBA{R: 108, G: 185, B: 68, A: 255}) // Truck green
 	headerBg.SetMinSize(fyne.NewSize(0, 50))
 
-	headerTitle := canvas.NewText("  📬 Outlook MSG Parser", color.White)
+	truckImg := canvas.NewImageFromFile("truck.png")
+	truckImg.FillMode = canvas.ImageFillContain
+	truckImg.SetMinSize(fyne.NewSize(40, 40))
+
+	headerTitle := canvas.NewText("  Outlook MSG Parser", color.White)
 	headerTitle.TextSize = 18
 	headerTitle.TextStyle = fyne.TextStyle{Bold: true}
 
-	headerSubtitle := canvas.NewText("Feed me your msg files, Will", color.NRGBA{R: 199, G: 210, B: 254, A: 255})
+	headerSubtitle := canvas.NewText("Feed me your msg files, Will", color.NRGBA{R: 220, G: 245, B: 195, A: 255})
 	headerSubtitle.TextSize = 13
 	headerSubtitle.TextStyle = fyne.TextStyle{Italic: true}
 
 	headerContent := container.NewHBox(
+		truckImg,
 		headerTitle,
 		layout.NewSpacer(),
 		headerSubtitle,
@@ -674,7 +679,7 @@ func runGUI() {
 	uploadIcon.FillMode = canvas.ImageFillContain
 	uploadIcon.SetMinSize(fyne.NewSize(80, 80))
 
-	headline := canvas.NewText("Feed me your msg files, Will", color.NRGBA{R: 79, G: 70, B: 229, A: 255})
+	headline := canvas.NewText("Feed me your msg files, Will", color.NRGBA{R: 108, G: 185, B: 68, A: 255}) // Truck green
 	headline.TextSize = 28
 	headline.TextStyle = fyne.TextStyle{Bold: true}
 	headline.Alignment = fyne.TextAlignCenter
@@ -716,12 +721,12 @@ func runGUI() {
 	if a.Settings().ThemeVariant() == theme.VariantDark {
 		dropZoneBg = canvas.NewRectangle(color.NRGBA{R: 30, G: 41, B: 59, A: 255})
 	} else {
-		dropZoneBg = canvas.NewRectangle(color.NRGBA{R: 238, G: 242, B: 255, A: 255})
+		dropZoneBg = canvas.NewRectangle(color.NRGBA{R: 232, G: 247, B: 220, A: 255}) // Light green tint
 	}
 	dropZoneBg.CornerRadius = 16
 	dropZoneBg.SetMinSize(fyne.NewSize(650, 400))
 
-	strokeColor := color.NRGBA{R: 99, G: 102, B: 241, A: 255}
+	strokeColor := color.NRGBA{R: 108, G: 185, B: 68, A: 255} // Truck green
 	dottedBorder := canvas.NewRasterWithPixels(func(x, y, w, h int) color.Color {
 		scale := float64(w) / 650.0
 		t := int(2.0 * scale)
