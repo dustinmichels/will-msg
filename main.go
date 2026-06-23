@@ -68,6 +68,11 @@ func main() {
 	output := flag.String("output", "", "Path to the CSV file to write")
 	flag.Parse()
 
+	if *input == "" && *output == "" {
+		runGUI()
+		return
+	}
+
 	if *input == "" || *output == "" {
 		flag.Usage()
 		os.Exit(2)

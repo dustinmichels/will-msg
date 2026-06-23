@@ -1,4 +1,9 @@
+.codegraph
+
+fyne-cross/
+
 data/
+data.zip
 output/
 
 ### macOS ###
