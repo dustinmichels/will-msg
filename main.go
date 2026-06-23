@@ -32,7 +32,7 @@ var (
 	directionalRE     = regexp.MustCompile(`^(?i)\s+(?:WEST|W|EAST|E|NORTH|N|SOUTH|S)\b`)
 	blockedStatusRE   = regexp.MustCompile(`\bBLOCK(?:ED|ING|S)?\b`)
 	signatureLineRE   = regexp.MustCompile(`^(?:regards|best|sincerely|thank you|thanks)[,!.\s]*$`)
-	wideGapRE          = regexp.MustCompile(`\s{3,}`)
+	wideGapRE         = regexp.MustCompile(`\s{3,}`)
 )
 
 type issuePattern struct {
@@ -58,14 +58,14 @@ var issuePatterns = []issuePattern{
 	{Label: "special_item_not_out", Pattern: "BEDFRAME AND SOFA NOT OUT"},
 	{Label: "special_item_not_out", Pattern: "FRIDGE NOT OUT"},
 	{Label: "special_item_not_out", Pattern: "SOFA NOT OUT"},
-	{Label: "recy_contaminated", Pattern: "RECY CONTAM"},
-	{Label: "recy_contaminated", Pattern: "RECYC CONTAM"},
-	{Label: "recy_contaminated", Pattern: "RECYCLE CONTAM"},
-	{Label: "recy_contaminated", Pattern: "RECYCLING CONTAM"},
-	{Label: "recy_contaminated", Pattern: "CONTAMINATED RECYC"},
-	{Label: "recy_contaminated", Pattern: "CONTAMINATED RECYCLE"},
-	{Label: "recy_contaminated", Pattern: "CONTAMINATED RECYCLING"},
-	{Label: "recy_contaminated", Pattern: "RECYCLING CONTAMINATED"},
+	{Label: "recyc_contaminated", Pattern: "RECY CONTAM"},
+	{Label: "recyc_contaminated", Pattern: "RECYC CONTAM"},
+	{Label: "recyc_contaminated", Pattern: "RECYCLE CONTAM"},
+	{Label: "recyc_contaminated", Pattern: "RECYCLING CONTAM"},
+	{Label: "recyc_contaminated", Pattern: "CONTAMINATED RECYC"},
+	{Label: "recyc_contaminated", Pattern: "CONTAMINATED RECYCLE"},
+	{Label: "recyc_contaminated", Pattern: "CONTAMINATED RECYCLING"},
+	{Label: "recyc_contaminated", Pattern: "RECYCLING CONTAMINATED"},
 }
 
 type record struct {
@@ -344,7 +344,7 @@ func parseInputPaths(paths []string) ([]record, parseSummary, error) {
 }
 
 type normalizedBodyLine struct {
-	text                 string
+	text                  string
 	hadTrailingWhitespace bool
 }
 
@@ -381,7 +381,7 @@ func normalizeBodyLine(raw string) normalizedBodyLine {
 		return normalizedBodyLine{}
 	}
 	return normalizedBodyLine{
-		text:                 strings.Join(fields, " "),
+		text:                  strings.Join(fields, " "),
 		hadTrailingWhitespace: len(raw)-len(trimmedRight) >= 6,
 	}
 }
@@ -443,7 +443,7 @@ func mergeWrappedLine(prev normalizedBodyLine, cur normalizedBodyLine) normalize
 		text += " " + cur.text
 	}
 	return normalizedBodyLine{
-		text:                 text,
+		text:                  text,
 		hadTrailingWhitespace: cur.hadTrailingWhitespace,
 	}
 }
@@ -791,7 +791,6 @@ func formatTime(value time.Time) string {
 	}
 	return value.Format(time.RFC3339)
 }
-
 
 func parseDateFromHeaders(headers string) time.Time {
 	headers = strings.TrimSpace(headers)

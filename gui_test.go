@@ -219,7 +219,6 @@ func TestFindMsgFiles_Zip(t *testing.T) {
 	}
 }
 
-
 func TestShouldIgnore(t *testing.T) {
 	tests := []struct {
 		path     string

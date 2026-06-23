@@ -4,6 +4,16 @@ Parse Microsoft Outlook `.msg` files into structured CSV rows.
 
 The parser is tuned for the Medford tag emails in `data/`. It accepts either one `.msg` file or a directory containing `.msg` files, then emits one CSV row per reported service exception.
 
+## Classification Labels
+
+- msw_and_recyc_not_out
+- msw_not_out
+- recyc_not_out
+- special_item_not_out
+- recyc_contaminated
+- blocked
+- other
+
 ## `msgcat` — inspect a single `.msg` file
 
 `msgcat` is a standalone CLI that dumps the plain-text body (and optional header block) of any Outlook `.msg` file to stdout. It has no dependencies beyond this module's existing parser.

@@ -154,7 +154,7 @@ func TestParseRecordsTrailingWhitespaceBlocksMerge(t *testing.T) {
 		Subject:    "Test subject",
 		Body: "07/01/2025 09:28:01\n" +
 			"23 MAPLE ST DRIVER REPORTED      \n" + // trailing spaces → standalone complete entry
-			"COULD NOT ACCESS PROPERTY",            // non-standalone: letter-start, no early suffix
+			"COULD NOT ACCESS PROPERTY", // non-standalone: letter-start, no early suffix
 	}
 
 	records := parseRecords(meta)
@@ -172,7 +172,6 @@ func TestParseRecordsTrailingWhitespaceBlocksMerge(t *testing.T) {
 		t.Errorf("records[1]: expected %q, got %q", "COULD NOT ACCESS PROPERTY", records[1].RawEntry)
 	}
 }
-
 
 func TestCollectInputPathsForDirectory(t *testing.T) {
 	paths, err := collectInputPaths("testdata")
@@ -466,49 +465,49 @@ func TestClassifyEntry(t *testing.T) {
 			name:          "recy contam w non acceptable items left behind",
 			input:         "123 MAIN ST RECY CONTAM W NONN ACCEPTABLE ITEMS IN BIN- LEFT BHND",
 			expectedLoc:   "123 MAIN ST",
-			expectedLabel: "recy_contaminated",
+			expectedLabel: "recyc_contaminated",
 			expectedTime:  "",
 		},
 		{
 			name:          "recy contam w unacceptable materials left behind",
 			input:         "45 BROADWAY RECY CONTAM W UNACCEPTABLE MATERIALS IN BIN- LEFT BHND",
 			expectedLoc:   "45 BROADWAY",
-			expectedLabel: "recy_contaminated",
+			expectedLabel: "recyc_contaminated",
 			expectedTime:  "",
 		},
 		{
 			name:          "recy contam w wood left behind",
 			input:         "12 COLBY ST RECY CONTAM W WOOD IN BIN- LEFT BHND",
 			expectedLoc:   "12 COLBY ST",
-			expectedLabel: "recy_contaminated",
+			expectedLabel: "recyc_contaminated",
 			expectedTime:  "",
 		},
 		{
 			name:          "recycle contam w trash left behind",
 			input:         "78 OAK AVE RECYCLE CONTAM W TRASH IN BIN- LEFT BHND",
 			expectedLoc:   "78 OAK AVE",
-			expectedLabel: "recy_contaminated",
+			expectedLabel: "recyc_contaminated",
 			expectedTime:  "",
 		},
 		{
 			name:          "contaminated recyc",
 			input:         "99 ELM RD CONTAMINATED RECYC",
 			expectedLoc:   "99 ELM RD",
-			expectedLabel: "recy_contaminated",
+			expectedLabel: "recyc_contaminated",
 			expectedTime:  "",
 		},
 		{
 			name:          "recycling contaminated not picked up",
 			input:         "14 MAPLE LN, RECYCLING CONTAMINATED, NOT PICKED UP",
 			expectedLoc:   "14 MAPLE LN",
-			expectedLabel: "recy_contaminated",
+			expectedLabel: "recyc_contaminated",
 			expectedTime:  "",
 		},
 		{
 			name:          "contaminated recycling",
 			input:         "250 HIGH ST CONTAMINATED RECYCLING",
 			expectedLoc:   "250 HIGH ST",
-			expectedLabel: "recy_contaminated",
+			expectedLabel: "recyc_contaminated",
 			expectedTime:  "",
 		},
 	}
@@ -1178,7 +1177,6 @@ func TestParseRecordsRejoinsWrappedParagraph(t *testing.T) {
 		t.Errorf("expected LocationHint %q, got %q", "84 BICKNELL RD", records[0].LocationHint)
 	}
 }
-
 
 func TestParseRecordsMedfordTags(t *testing.T) {
 	meta := messageMetadata{

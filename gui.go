@@ -3,10 +3,12 @@ package main
 import (
 	"archive/zip"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"image/color"
 	"io"
 	"log"
+	"math"
 	"net/url"
 	"os"
 	"os/exec"
@@ -24,6 +26,8 @@ import (
 	"fyne.io/fyne/v2/storage"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"github.com/ncruces/zenity"
 )
 
 type msgSource struct {
@@ -289,8 +293,111 @@ func runGUI() {
 	var csvData [][]string
 	var updateSource func(path string)
 	// Status Bar
-	statusBar := widget.NewLabel("Feed me your msg files, Will")
-	statusBar.TextStyle = fyne.TextStyle{Italic: true}
+
+	statusBarBg := canvas.NewRectangle(color.NRGBA{R: 30, G: 41, B: 59, A: 255}) // Slate-800
+	statusBarBg.SetMinSize(fyne.NewSize(0, 30))
+
+	// Pacman bottom chomping animation
+	statusBarAnimationContainer := container.NewWithoutLayout()
+
+	var mouthAngle float64 = 0.0
+	pacman := canvas.NewRasterWithPixels(func(x, y, w, h int) color.Color {
+		cx := float64(w) / 2.0
+		cy := float64(h) / 2.0
+		radius := float64(w) / 2.0
+		if float64(h)/2.0 < radius {
+			radius = float64(h) / 2.0
+		}
+
+		dx := float64(x) - cx
+		dy := float64(y) - cy
+		dist := math.Sqrt(dx*dx + dy*dy)
+		if dist > radius {
+			return color.Transparent
+		}
+
+		angle := math.Atan2(dy, dx)
+		// Pacman is going right to left, so the mouth faces left (angle around Pi or -Pi)
+		if math.Abs(angle) > math.Pi-mouthAngle {
+			return color.Transparent
+		}
+
+		return color.NRGBA{R: 255, G: 255, B: 0, A: 255} // Pure Yellow
+	})
+	pacman.Resize(fyne.NewSize(24, 24))
+	statusBarAnimationContainer.Add(pacman)
+
+	// Dots
+	var dots []*canvas.Circle
+	for i := 0; i < 40; i++ {
+		dot := canvas.NewCircle(color.NRGBA{R: 255, G: 255, B: 0, A: 255})
+		dot.Resize(fyne.NewSize(6, 6))
+		dots = append(dots, dot)
+		statusBarAnimationContainer.Add(dot)
+	}
+
+	var pacmanX float32 = -9999
+
+	go func() {
+		ticker := time.NewTicker(time.Millisecond * 30)
+		defer ticker.Stop()
+
+		var t float64 = 0
+		for range ticker.C {
+			t += 0.13 // mouth chomping speed
+
+			width := statusBarBg.Size().Width
+			if width <= 0 {
+				continue
+			}
+
+			if pacmanX == -9999 {
+				pacmanX = width + 30
+			}
+
+			pacmanX -= 1.4 // movement speed
+			if pacmanX < -30 {
+				pacmanX = width + 30
+			}
+
+			mouthAngle = math.Abs(math.Sin(t)) * 0.8
+
+			barHeight := statusBarBg.Size().Height
+			if barHeight <= 0 {
+				barHeight = 30
+			}
+			pacmanY := (barHeight - 24) / 2
+			dotY := (barHeight - 6) / 2
+
+			fyne.Do(func() {
+				pacman.Move(fyne.NewPos(pacmanX, pacmanY))
+				pacman.Refresh()
+
+				dotSpacing := float32(50.0)
+				for i, dot := range dots {
+					dotX := float32(i+1) * dotSpacing
+					dot.Move(fyne.NewPos(dotX+9, dotY))
+
+					if pacmanX < dotX {
+						dot.Hide()
+					} else {
+						if dotX < width {
+							dot.Show()
+						} else {
+							dot.Hide()
+						}
+					}
+					dot.Refresh()
+				}
+				statusBarAnimationContainer.Refresh()
+			})
+		}
+	}()
+
+	statusBarContainer := container.NewStack(
+		statusBarBg,
+		statusBarAnimationContainer,
+	)
 
 	selectedPathLabel := widget.NewLabel("Selected: None")
 	selectedPathLabel.Wrapping = fyne.TextWrapWord
@@ -373,33 +480,6 @@ func runGUI() {
 	saveAsButton.Importance = widget.HighImportance
 	saveAsButton.Disable()
 
-	// Dialogs
-	fileOpenDialog := dialog.NewFileOpen(func(reader fyne.URIReadCloser, err error) {
-		if err != nil {
-			dialog.ShowError(err, w)
-			return
-		}
-		if reader == nil {
-			return
-		}
-		path := reader.URI().Path()
-		reader.Close()
-		updateSource(path)
-	}, w)
-	fileOpenDialog.SetFilter(storage.NewExtensionFileFilter([]string{".msg", ".zip"}))
-
-	folderOpenDialog := dialog.NewFolderOpen(func(reader fyne.ListableURI, err error) {
-		if err != nil {
-			dialog.ShowError(err, w)
-			return
-		}
-		if reader == nil {
-			return
-		}
-		path := reader.Path()
-		updateSource(path)
-	}, w)
-
 	bodyContainer := container.NewStack()
 
 	var showWelcome func()
@@ -409,7 +489,6 @@ func runGUI() {
 		sources, err := findMsgFiles(path)
 		if err != nil {
 			dialog.ShowError(err, w)
-			statusBar.SetText("Error scanning source.")
 			return
 		}
 
@@ -425,11 +504,9 @@ func runGUI() {
 
 		if len(sources) > 0 {
 			runButton.Enable()
-			statusBar.SetText(fmt.Sprintf("Source scanned. Ready to parse %d files.", len(sources)))
 			showWorkspace()
 		} else {
 			runButton.Disable()
-			statusBar.SetText("No .msg files found in selected source.")
 			dialog.ShowInformation("No Files Found", "No .msg files were found in the selected source.", w)
 		}
 	}
@@ -447,14 +524,12 @@ func runGUI() {
 		runButton.Disable()
 		downloadButton.Disable()
 		saveAsButton.Disable()
-		statusBar.SetText("Parsing .msg files... Please wait.")
 
 		go func() {
 			records, err := parseMsgSources(currentSources)
 			if err != nil {
 				fyne.Do(func() {
 					dialog.ShowError(err, w)
-					statusBar.SetText("Error parsing files.")
 					runButton.Enable()
 				})
 				return
@@ -463,7 +538,6 @@ func runGUI() {
 			if len(records) == 0 {
 				fyne.Do(func() {
 					dialog.ShowInformation("No Data", "No structured records found in selected files.", w)
-					statusBar.SetText("No records parsed.")
 					runButton.Enable()
 				})
 				return
@@ -479,7 +553,6 @@ func runGUI() {
 				previewTable.Refresh()
 				downloadButton.Enable()
 				saveAsButton.Enable()
-				statusBar.SetText(fmt.Sprintf("Successfully parsed %d records from %d files!", len(records), len(currentSources)))
 				runButton.Enable()
 			})
 		}()
@@ -494,7 +567,6 @@ func runGUI() {
 		file, err := os.Create(filePath)
 		if err != nil {
 			dialog.ShowError(err, w)
-			statusBar.SetText("Failed to save CSV automatically.")
 			return
 		}
 		defer file.Close()
@@ -503,10 +575,8 @@ func runGUI() {
 		err = csvWriter.WriteAll(csvData)
 		if err != nil {
 			dialog.ShowError(err, w)
-			statusBar.SetText("Failed to save CSV automatically.")
 			return
 		}
-		statusBar.SetText(fmt.Sprintf("CSV saved automatically to %s", filename))
 
 		// Show custom dialog with file name, directory, and action buttons to open/reveal
 		title := "CSV Saved Automatically"
@@ -535,35 +605,52 @@ func runGUI() {
 	}
 
 	saveAsButton.OnTapped = func() {
-		fileSaveDialog := dialog.NewFileSave(func(writer fyne.URIWriteCloser, err error) {
+		datetime := time.Now().Format("2006-01-02_150405")
+		defaultName := fmt.Sprintf("msg_parsed_%s.csv", datetime)
+		go func() {
+			path, err := zenity.SelectFileSave(
+				zenity.Title("Save CSV As..."),
+				zenity.Filename(defaultName),
+				zenity.FileFilters{
+					{Name: "CSV files", Patterns: []string{"*.csv"}},
+				},
+			)
 			if err != nil {
-				dialog.ShowError(err, w)
+				if !errors.Is(err, zenity.ErrCanceled) {
+					fyne.Do(func() {
+						dialog.ShowError(err, w)
+					})
+				}
 				return
 			}
-			if writer == nil {
-				return
-			}
-			defer writer.Close()
 
-			csvWriter := csv.NewWriter(writer)
+			file, err := os.Create(path)
+			if err != nil {
+				fyne.Do(func() {
+					dialog.ShowError(err, w)
+				})
+				return
+			}
+			defer file.Close()
+
+			csvWriter := csv.NewWriter(file)
 			err = csvWriter.WriteAll(csvData)
 			if err != nil {
-				dialog.ShowError(err, w)
-				statusBar.SetText("Failed to save CSV.")
+				fyne.Do(func() {
+					dialog.ShowError(err, w)
+				})
 				return
 			}
-			statusBar.SetText("CSV saved successfully.")
-		}, w)
-		datetime := time.Now().Format("2006-01-02_150405")
-		fileSaveDialog.SetFileName(fmt.Sprintf("msg_parsed_%s.csv", datetime))
-		fileSaveDialog.SetFilter(storage.NewExtensionFileFilter([]string{".csv"}))
-		fileSaveDialog.Show()
+
+			fyne.Do(func() {
+			})
+		}()
 	}
 
 	headerBg := canvas.NewRectangle(color.NRGBA{R: 79, G: 70, B: 229, A: 255})
 	headerBg.SetMinSize(fyne.NewSize(0, 50))
 
-	headerTitle := canvas.NewText("  will-msg 📬 Outlook MSG Parser", color.White)
+	headerTitle := canvas.NewText("  📬 Outlook MSG Parser", color.White)
 	headerTitle.TextSize = 18
 	headerTitle.TextStyle = fyne.TextStyle{Bold: true}
 
@@ -592,24 +679,36 @@ func runGUI() {
 	headline.TextStyle = fyne.TextStyle{Bold: true}
 	headline.Alignment = fyne.TextAlignCenter
 
-	description := widget.NewLabel("Drop files, folders, or .zip archives here, or click to select.")
+	description := widget.NewLabel("Drop or select. Accepts .msg files, folders containing .msg files, or .zip archives.")
 	description.Alignment = fyne.TextAlignCenter
 	description.TextStyle = fyne.TextStyle{Italic: true}
 
-	welcomeSelectFileBtn := widget.NewButtonWithIcon("Select MSG / ZIP File", theme.DocumentIcon(), func() {
-		fileOpenDialog.Show()
+	welcomeSelectBtn := widget.NewButtonWithIcon("Select file or folder", theme.FolderOpenIcon(), func() {
+		go func() {
+			path, err := zenity.SelectFile(
+				zenity.Title("Select file or folder"),
+				zenity.FileFilters{
+					{Name: "MSG/ZIP files", Patterns: []string{"*.msg", "*.zip"}},
+				},
+			)
+			if err != nil {
+				if !errors.Is(err, zenity.ErrCanceled) {
+					fyne.Do(func() {
+						dialog.ShowError(err, w)
+					})
+				}
+				return
+			}
+			fyne.Do(func() {
+				updateSource(path)
+			})
+		}()
 	})
-	welcomeSelectFileBtn.Importance = widget.HighImportance
-
-	welcomeSelectFolderBtn := widget.NewButtonWithIcon("Select Folder", theme.FolderOpenIcon(), func() {
-		folderOpenDialog.Show()
-	})
-	welcomeSelectFolderBtn.Importance = widget.HighImportance
+	welcomeSelectBtn.Importance = widget.HighImportance
 
 	welcomeButtons := container.NewHBox(
 		layout.NewSpacer(),
-		welcomeSelectFileBtn,
-		welcomeSelectFolderBtn,
+		welcomeSelectBtn,
 		layout.NewSpacer(),
 	)
 
@@ -619,6 +718,7 @@ func runGUI() {
 	} else {
 		dropZoneBg = canvas.NewRectangle(color.NRGBA{R: 238, G: 242, B: 255, A: 255})
 	}
+	dropZoneBg.CornerRadius = 16
 	dropZoneBg.SetMinSize(fyne.NewSize(650, 400))
 
 	strokeColor := color.NRGBA{R: 99, G: 102, B: 241, A: 255}
@@ -638,12 +738,42 @@ func runGUI() {
 		}
 		period := dotSize + gapSize
 
-		if x < t || x >= w-t {
+		// Rounded corner radius in physical pixels
+		r := 16.0 * scale
+		fx, fy := float64(x), float64(y)
+		fw, fh := float64(w), float64(h)
+
+		// For each corner, check if the pixel is inside the corner square but
+		// outside the rounded arc — if so, skip it (transparent).
+		inCorner := func(cx, cy float64) bool {
+			dx, dy := fx-cx, fy-cy
+			return dx*dx+dy*dy > r*r
+		}
+		if fx < r && fy < r && inCorner(r, r) {
+			return color.Transparent
+		}
+		if fx >= fw-r && fy < r && inCorner(fw-r, r) {
+			return color.Transparent
+		}
+		if fx < r && fy >= fh-r && inCorner(r, fh-r) {
+			return color.Transparent
+		}
+		if fx >= fw-r && fy >= fh-r && inCorner(fw-r, fh-r) {
+			return color.Transparent
+		}
+
+		// Draw the dotted border only along the edges (within thickness t)
+		onLeft := x < t
+		onRight := x >= w-t
+		onTop := y < t
+		onBottom := y >= h-t
+
+		if onLeft || onRight {
 			if (y % period) < dotSize {
 				return strokeColor
 			}
 		}
-		if y < t || y >= h-t {
+		if onTop || onBottom {
 			if (x % period) < dotSize {
 				return strokeColor
 			}
@@ -735,7 +865,7 @@ func runGUI() {
 
 	mainLayout := container.NewBorder(
 		header,
-		statusBar,
+		statusBarContainer,
 		nil,
 		nil,
 		bodyContainer,
