@@ -5,10 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/theme"
-	"fyne.io/fyne/v2/widget"
 )
 
 func createTestZip(t *testing.T, files map[string][]byte) string {
@@ -37,7 +33,7 @@ func createTestZip(t *testing.T, files map[string][]byte) string {
 }
 
 func TestFindMsgFiles_SingleMsg(t *testing.T) {
-	msgPath := filepath.Join("data", "Medford Tags 01_02_26.msg")
+	msgPath := filepath.Join("testdata", "Medford Tags 01_02_26.msg")
 	sources, err := findMsgFiles(msgPath)
 	if err != nil {
 		t.Fatalf("findMsgFiles error: %v", err)
@@ -56,13 +52,13 @@ func TestFindMsgFiles_SingleMsg(t *testing.T) {
 }
 
 func TestFindMsgFiles_Folder(t *testing.T) {
-	sources, err := findMsgFiles("data")
+	sources, err := findMsgFiles("testdata")
 	if err != nil {
 		t.Fatalf("findMsgFiles error: %v", err)
 	}
 
-	if len(sources) != 5 {
-		t.Fatalf("expected 5 sources, got %d", len(sources))
+	if len(sources) != 6 {
+		t.Fatalf("expected 6 sources, got %d", len(sources))
 	}
 
 	for _, src := range sources {
@@ -173,7 +169,7 @@ func TestFindMsgFiles_HiddenAncestor(t *testing.T) {
 }
 
 func TestFindMsgFiles_Zip(t *testing.T) {
-	realMsgContent, err := os.ReadFile(filepath.Join("data", "Medford Tags 01_02_26.msg"))
+	realMsgContent, err := os.ReadFile(filepath.Join("testdata", "Medford Tags 01_02_26.msg"))
 	if err != nil {
 		t.Fatalf("read real msg file: %v", err)
 	}
@@ -223,25 +219,6 @@ func TestFindMsgFiles_Zip(t *testing.T) {
 	}
 }
 
-func TestNewBorderLayoutObjectsOrder(t *testing.T) {
-	icon := widget.NewIcon(theme.DocumentIcon())
-	label := widget.NewLabel("test")
-	border := container.NewBorder(nil, nil, icon, nil, label)
-	for i, obj := range border.Objects {
-		t.Logf("Objects[%d] type: %T", i, obj)
-	}
-
-	if len(border.Objects) < 2 {
-		t.Fatalf("expected at least 2 objects, got %d", len(border.Objects))
-	}
-
-	if _, ok := border.Objects[0].(*widget.Label); !ok {
-		t.Errorf("expected border.Objects[0] to be *widget.Label, got %T", border.Objects[0])
-	}
-	if _, ok := border.Objects[1].(*widget.Icon); !ok {
-		t.Errorf("expected border.Objects[1] to be *widget.Icon, got %T", border.Objects[1])
-	}
-}
 
 func TestShouldIgnore(t *testing.T) {
 	tests := []struct {

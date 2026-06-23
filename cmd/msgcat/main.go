@@ -45,9 +45,10 @@ func main() {
 
 func parse(path string) (body, headers string, err error) {
 	// suppress noisy internal logging from the parser
+	logWriter := log.Writer()
 	log.SetOutput(io.Discard)
 	msg, err := msgparser.ParseMsgFile(path)
-	log.SetOutput(os.Stderr)
+	log.SetOutput(logWriter)
 	if err != nil {
 		return "", "", err
 	}

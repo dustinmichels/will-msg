@@ -77,15 +77,11 @@ func loadMessageFromZip(src msgSource) (messageMetadata, error) {
 
 func shouldIgnore(path string) bool {
 	normalized := strings.ReplaceAll(path, "\\", "/")
-	parts := strings.Split(normalized, "/")
-	for _, part := range parts {
+	for _, part := range strings.Split(normalized, "/") {
 		if part == "" || part == "." || part == ".." {
 			continue
 		}
-		if strings.EqualFold(part, "__MACOSX") {
-			return true
-		}
-		if strings.HasPrefix(part, ".") {
+		if strings.HasPrefix(part, ".") || strings.EqualFold(part, "__MACOSX") {
 			return true
 		}
 	}
@@ -191,7 +187,9 @@ func parseMsgSources(sources []msgSource) ([]record, error) {
 	return allRecords, nil
 }
 
-type customTheme struct{}
+type customTheme struct {
+	fyne.Theme
+}
 
 func (c customTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
 	if name == theme.ColorNamePrimary {
@@ -221,19 +219,7 @@ func (c customTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) 
 		}
 		return color.NRGBA{R: 241, G: 245, B: 249, A: 255} // Slate-100
 	}
-	return theme.DefaultTheme().Color(name, variant)
-}
-
-func (c customTheme) Font(style fyne.TextStyle) fyne.Resource {
-	return theme.DefaultTheme().Font(style)
-}
-
-func (c customTheme) Icon(name fyne.ThemeIconName) fyne.Resource {
-	return theme.DefaultTheme().Icon(name)
-}
-
-func (c customTheme) Size(name fyne.ThemeSizeName) float32 {
-	return theme.DefaultTheme().Size(name)
+	return c.Theme.Color(name, variant)
 }
 
 func getDownloadsDir() string {
@@ -293,7 +279,7 @@ func revealFile(filePath string, a fyne.App) {
 
 func runGUI() {
 	a := app.New()
-	a.Settings().SetTheme(customTheme{})
+	a.Settings().SetTheme(customTheme{Theme: theme.DefaultTheme()})
 
 	w := a.NewWindow("Outlook MSG to CSV Parser")
 	w.Resize(fyne.NewSize(950, 700))
@@ -322,8 +308,16 @@ func runGUI() {
 		},
 		func(id widget.ListItemID, item fyne.CanvasObject) {
 			box := item.(*fyne.Container)
-			label := box.Objects[0].(*widget.Label)
-			label.SetText(displayNames[id])
+			var label *widget.Label
+			for _, obj := range box.Objects {
+				if l, ok := obj.(*widget.Label); ok {
+					label = l
+					break
+				}
+			}
+			if label != nil {
+				label.SetText(displayNames[id])
+			}
 		},
 	)
 
@@ -475,35 +469,9 @@ func runGUI() {
 				return
 			}
 
-			headers := []string{
-				"source_file",
-				"subject",
-				"message_date",
-				"reported_at",
-				"dispatcher",
-				"row_in_message",
-				"raw_entry",
-				"location",
-				"issue",
-				"label",
-				"issue_time",
-			}
-
-			csvRows := [][]string{headers}
+			csvRows := [][]string{csvHeaders}
 			for _, rec := range records {
-				csvRows = append(csvRows, []string{
-					rec.SourceFile,
-					rec.Subject,
-					rec.MessageDate,
-					rec.ReportedAt,
-					rec.Dispatcher,
-					fmt.Sprintf("%d", rec.RowInMessage),
-					rec.RawEntry,
-					rec.LocationHint,
-					rec.ParsedIssue,
-					rec.Label,
-					rec.IssueTime,
-				})
+				csvRows = append(csvRows, rec.toRow())
 			}
 
 			fyne.Do(func() {

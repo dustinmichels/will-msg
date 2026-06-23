@@ -10,7 +10,7 @@ import (
 )
 
 func TestParseRecordsFromSampleMessage(t *testing.T) {
-	meta, err := loadMessage(filepath.Join("data", "Medford Tags 01_02_26.msg"))
+	meta, err := loadMessage(filepath.Join("testdata", "Medford Tags 01_02_26.msg"))
 	if err != nil {
 		t.Fatalf("loadMessage: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestParseRecordsRejoinsWrappedPlaintextRows(t *testing.T) {
 }
 
 func TestParseRecordsRejoinsWrappedRealMessage(t *testing.T) {
-	meta, err := loadMessage(filepath.Join("data-new", "MEDFORD TAGS 03_02_26.msg"))
+	meta, err := loadMessage(filepath.Join("testdata", "MEDFORD TAGS 03_02_26.msg"))
 	if err != nil {
 		t.Fatalf("loadMessage: %v", err)
 	}
@@ -175,12 +175,12 @@ func TestParseRecordsTrailingWhitespaceBlocksMerge(t *testing.T) {
 
 
 func TestCollectInputPathsForDirectory(t *testing.T) {
-	paths, err := collectInputPaths("data")
+	paths, err := collectInputPaths("testdata")
 	if err != nil {
 		t.Fatalf("collectInputPaths: %v", err)
 	}
-	if len(paths) != 5 {
-		t.Fatalf("expected 5 .msg paths, got %d", len(paths))
+	if len(paths) != 6 {
+		t.Fatalf("expected 6 .msg paths, got %d", len(paths))
 	}
 	if filepath.Ext(paths[0]) != ".msg" {
 		t.Fatalf("expected .msg path, got %q", paths[0])
@@ -188,7 +188,7 @@ func TestCollectInputPathsForDirectory(t *testing.T) {
 }
 
 func TestParseInputPathsForDirectory(t *testing.T) {
-	paths, err := collectInputPaths("data")
+	paths, err := collectInputPaths("testdata")
 	if err != nil {
 		t.Fatalf("collectInputPaths: %v", err)
 	}
@@ -197,18 +197,18 @@ func TestParseInputPathsForDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseInputPaths: %v", err)
 	}
-	if len(records) != 22 {
-		t.Fatalf("expected 22 records, got %d", len(records))
+	if len(records) != 45 {
+		t.Fatalf("expected 45 records, got %d", len(records))
 	}
-	if summary.ParsedFiles != 5 || summary.SkippedFiles != 0 {
-		t.Fatalf("expected summary {ParsedFiles:5 SkippedFiles:0}, got %+v", summary)
+	if summary.ParsedFiles != 6 || summary.SkippedFiles != 0 {
+		t.Fatalf("expected summary {ParsedFiles:6 SkippedFiles:0}, got %+v", summary)
 	}
 }
 
 func TestParseInputPathsSummarizesSkippedFiles(t *testing.T) {
 	tempDir := t.TempDir()
 
-	validInput, err := os.ReadFile(filepath.Join("data", "Medford Tags 01_02_26.msg"))
+	validInput, err := os.ReadFile(filepath.Join("testdata", "Medford Tags 01_02_26.msg"))
 	if err != nil {
 		t.Fatalf("ReadFile valid sample: %v", err)
 	}
@@ -1089,7 +1089,7 @@ func TestParseRecordsSkipsPreambleFooterUntilFirstTimestamp(t *testing.T) {
 }
 
 func TestValidateAllCSVSamples(t *testing.T) {
-	file, err := os.Open(filepath.Join("sample", "msg_parsed_2026-06-23_125025.csv"))
+	file, err := os.Open(filepath.Join("testdata", "msg_parsed.csv"))
 	if err != nil {
 		t.Skip("sample CSV not found")
 	}

@@ -24,7 +24,7 @@ var (
 	listRE            = regexp.MustCompile(`^(?i)(\d+(?:(?:\s*(?:[.,]|&amp;|&|AND)\s*|\s+)\d+)+(?:\s*[.,])?)\s+(.*\S)\s*$`)
 	leadingListTailRE = regexp.MustCompile(`^(?i)(?:[.,]|&amp;|&|AND)\s*(\d+)\s+(.*\S)\s*$`)
 	numberRE          = regexp.MustCompile(`\d+`)
-	suffixRE          = regexp.MustCompile(`(?i)\b(?:STREET|ST|AVENUE|AVE|ROAD|RD|WAY|DRIVE|DR|LANE|LN|PLACE|PL|CIRCLE|CIR|BOULEVARD|BLVD|HIGHWAY|HWY|TERRACE|TER|TERR|PARKWAY|PKWY|COURT|CT|COVE|SQUARE|SQ|APTS|APT|CONDOS|CONDO|UNITS|UNIT|SUITES|SUITE|STE|FLOOR|FL|FELLSWAY|BROADWAY|GREENWAY|EXPRESSWAY|SPEEDWAY)\b`)
+	suffixRE          = regexp.MustCompile(`(?i)\b(?:STREET|ST|STR|AVENUE|AVE|ROAD|RD|WAY|DRIVE|DR|LANE|LN|PLACE|PL|CIRCLE|CIR|BOULEVARD|BLVD|HIGHWAY|HWY|TERRACE|TER|TERR|PARKWAY|PKWY|COURT|CT|COVE|SQUARE|SQ|PARK|TRAIL|TRL|APTS|APT|CONDOS|CONDO|UNITS|UNIT|SUITES|SUITE|STE|FLOOR|FL|FELLSWAY|BROADWAY|GREENWAY|EXPRESSWAY|SPEEDWAY)\b`)
 	unitModifierRE    = regexp.MustCompile(`^(?i)(?:\s*#?\s*\d+[A-Z]?|\s+[A-Z\d]\b)`)
 	locModifierRE     = regexp.MustCompile(`^(?i)(?:\s+(?:MANY|ALL)\s+(?:HOMES|HOUSES|APTS|CONDOS|UNITS)\b)`)
 	statusStartRE     = regexp.MustCompile(`^(?i)\s*(?:IS|WAS|HAS|ARE|BE|TOO|WILL)\b`)
@@ -43,8 +43,13 @@ type issuePattern struct {
 var issuePatterns = []issuePattern{
 	{Label: "msw_and_recyc_not_out", Pattern: "MSW AND RECYC NOT OUT"},
 	{Label: "msw_and_recyc_not_out", Pattern: "RECYC AND MSW NOT OUT"},
+	{Label: "msw_and_recyc_not_out", Pattern: "TRASH AND RECYCLING NOT OUT"},
+	{Label: "msw_and_recyc_not_out", Pattern: "TRASH AND RECYC NOT OUT"},
+	{Label: "msw_and_recyc_not_out", Pattern: "TRASH/RECYC NOT OUT"},
+	{Label: "msw_and_recyc_not_out", Pattern: "TRASH / RECYC NOT OUT"},
 	{Label: "recyc_not_out", Pattern: "RECYC NOT OUT"},
 	{Label: "recyc_not_out", Pattern: "RECYCLE NOT OUT"},
+	{Label: "recyc_not_out", Pattern: "RECYCLING NOT OUT"},
 	{Label: "recyc_not_out", Pattern: "RECYCCLE NOT OUT"},
 	{Label: "recyc_not_out", Pattern: "NOT OUT RECYC"},
 	{Label: "msw_not_out", Pattern: "MSW NOT OUT"},
@@ -75,6 +80,36 @@ type record struct {
 	ParsedIssue  string
 	Label        string
 	IssueTime    string
+}
+
+var csvHeaders = []string{
+	"source_file",
+	"subject",
+	"message_date",
+	"reported_at",
+	"dispatcher",
+	"row_in_message",
+	"raw_entry",
+	"location",
+	"issue",
+	"label",
+	"issue_time",
+}
+
+func (rec record) toRow() []string {
+	return []string{
+		rec.SourceFile,
+		rec.Subject,
+		rec.MessageDate,
+		rec.ReportedAt,
+		rec.Dispatcher,
+		fmt.Sprintf("%d", rec.RowInMessage),
+		rec.RawEntry,
+		rec.LocationHint,
+		rec.ParsedIssue,
+		rec.Label,
+		rec.IssueTime,
+	}
 }
 
 type messageMetadata struct {
@@ -146,7 +181,13 @@ func loadMessage(path string) (messageMetadata, error) {
 		return messageMetadata{}, errors.New("message body is empty")
 	}
 
-	messageDate := firstNonZeroTime(msg.Date, msg.ClientSubmitTime, msg.CreationDate, msg.LastModificationDate)
+	var messageDate time.Time
+	for _, t := range []time.Time{msg.Date, msg.ClientSubmitTime, msg.CreationDate, msg.LastModificationDate} {
+		if !t.IsZero() {
+			messageDate = t
+			break
+		}
+	}
 	if messageDate.IsZero() {
 		messageDate = parseDateFromHeaders(msg.TransportMessageHeaders)
 	}
@@ -206,7 +247,7 @@ func parseRecords(meta messageMetadata) []record {
 			}
 			break
 		}
-		if strings.EqualFold(line, "Please see tags called in today:") {
+		if isIntroLine(line) {
 			continue
 		}
 
@@ -308,8 +349,7 @@ type normalizedBodyLine struct {
 }
 
 func cleanLines(body string) []string {
-	body = strings.ReplaceAll(body, "\r\n", "\n")
-	body = strings.ReplaceAll(body, "\r", "\n")
+	body = strings.NewReplacer("\r\n", "\n", "\r", "\n").Replace(body)
 
 	lines := strings.Split(body, "\n")
 	cleaned := make([]normalizedBodyLine, 0, len(lines))
@@ -336,12 +376,12 @@ func cleanLines(body string) []string {
 
 func normalizeBodyLine(raw string) normalizedBodyLine {
 	trimmedRight := strings.TrimRight(raw, " \t")
-	line := strings.TrimSpace(trimmedRight)
-	if line == "" {
+	fields := strings.Fields(trimmedRight)
+	if len(fields) == 0 {
 		return normalizedBodyLine{}
 	}
 	return normalizedBodyLine{
-		text:                 strings.Join(strings.Fields(line), " "),
+		text:                 strings.Join(fields, " "),
 		hadTrailingWhitespace: len(raw)-len(trimmedRight) >= 6,
 	}
 }
@@ -594,7 +634,12 @@ func findLastAddressIndex(cleaned string) int {
 			continue
 		}
 		if statusStartRE.MatchString(rem) {
-			continue
+			// Only reject if it's a suffix that can double as a standalone noun/subject in shorthand
+			// (like "ROAD", "WAY", "PARK") rather than a definitive street abbreviation (like "ST", "AVE").
+			suffixUpper := strings.ToUpper(cleaned[start:end])
+			if suffixUpper == "ROAD" || suffixUpper == "WAY" || suffixUpper == "PARK" {
+				continue
+			}
 		}
 
 		return end
@@ -632,21 +677,14 @@ func splitAddressAndStatus(raw string) (address string, status string) {
 			status = strings.TrimSpace(cleaned[earliestIdx:])
 		} else {
 			// 3. Fallback: split by first comma, semicolon, or space-dash-space
-			firstDelim := -1
-			delimLen := 0
-
-			if idx := strings.Index(cleaned, " - "); idx != -1 {
-				firstDelim = idx
-				delimLen = 3
+			firstDelim := strings.Index(cleaned, " - ")
+			delimLen := 3
+			if firstDelim == -1 {
+				delimLen = 0
 			}
-
-			for i, r := range cleaned {
-				if r == ',' || r == ';' {
-					if firstDelim == -1 || i < firstDelim {
-						firstDelim = i
-						delimLen = 1
-					}
-				}
+			if idx := strings.IndexAny(cleaned, ",;"); idx != -1 && (firstDelim == -1 || idx < firstDelim) {
+				firstDelim = idx
+				delimLen = 1
 			}
 
 			if firstDelim != -1 {
@@ -734,38 +772,12 @@ func writeCSV(path string, records []record) error {
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
 
-	headers := []string{
-		"source_file",
-		"subject",
-		"message_date",
-		"reported_at",
-		"dispatcher",
-		"row_in_message",
-		"raw_entry",
-		"location",
-		"issue",
-		"label",
-		"issue_time",
-	}
-	if err := writer.Write(headers); err != nil {
+	if err := writer.Write(csvHeaders); err != nil {
 		return err
 	}
 
 	for _, rec := range records {
-		row := []string{
-			rec.SourceFile,
-			rec.Subject,
-			rec.MessageDate,
-			rec.ReportedAt,
-			rec.Dispatcher,
-			fmt.Sprintf("%d", rec.RowInMessage),
-			rec.RawEntry,
-			rec.LocationHint,
-			rec.ParsedIssue,
-			rec.Label,
-			rec.IssueTime,
-		}
-		if err := writer.Write(row); err != nil {
+		if err := writer.Write(rec.toRow()); err != nil {
 			return err
 		}
 	}
@@ -780,14 +792,6 @@ func formatTime(value time.Time) string {
 	return value.Format(time.RFC3339)
 }
 
-func firstNonZeroTime(values ...time.Time) time.Time {
-	for _, value := range values {
-		if !value.IsZero() {
-			return value
-		}
-	}
-	return time.Time{}
-}
 
 func parseDateFromHeaders(headers string) time.Time {
 	headers = strings.TrimSpace(headers)

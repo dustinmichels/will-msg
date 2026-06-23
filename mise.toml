@@ -17,3 +17,18 @@ mkdir -p bin
 cp fyne-cross/bin/windows-amd64/will-msg.exe bin/will-msg-windows-amd64.exe
 cp fyne-cross/dist/windows-amd64/will-msg.exe.zip bin/will-msg-windows-amd64.zip
 """
+
+[tasks.parse]
+description = "Parse a message file from data-new"
+run = '''
+#!/usr/bin/env bash
+if [ -z "$1" ]; then
+  echo "Usage: mise run parse <msg_file_name_or_path>"
+  exit 1
+fi
+file="$1"
+if [[ ! "$file" =~ ^data-new/ ]]; then
+  file="data-new/$file"
+fi
+go run ./cmd/msgcat "$file"
+'''
