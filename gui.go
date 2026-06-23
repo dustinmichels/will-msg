@@ -483,8 +483,9 @@ func runGUI() {
 				"dispatcher",
 				"row_in_message",
 				"raw_entry",
-				"location_hint",
-				"issue_type",
+				"location",
+				"issue",
+				"label",
 				"issue_time",
 			}
 
@@ -499,7 +500,8 @@ func runGUI() {
 					fmt.Sprintf("%d", rec.RowInMessage),
 					rec.RawEntry,
 					rec.LocationHint,
-					rec.IssueType,
+					rec.ParsedIssue,
+					rec.Label,
 					rec.IssueTime,
 				})
 			}

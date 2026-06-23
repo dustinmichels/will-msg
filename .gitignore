@@ -1,10 +1,14 @@
 .codegraph
 
 fyne-cross/
+bin/
 
 data/
+data-new/
 data.zip
 output/
+
+sample/
 
 ### macOS ###
 # General

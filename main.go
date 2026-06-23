@@ -18,27 +18,39 @@ import (
 )
 
 var (
-	timestampLineRE = regexp.MustCompile(`^(\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2})\s+(\S+)\s*$`)
-	entryTimeRE     = regexp.MustCompile(`\b(\d{3,4}(?:AM|PM))\s*$`)
-	subjectDateRE   = regexp.MustCompile(`(\d{2})[._/-](\d{2})[._/-](\d{2,4})`)
+	timestampLineRE   = regexp.MustCompile(`^(\d{2}/\d{2}/\d{4} \d{2}:\d{2}:\d{2})(?:\s+(\S+))?\s*$`)
+	entryTimeRE       = regexp.MustCompile(`\b(\d{3,4}(?:AM|PM))\s*$`)
+	subjectDateRE     = regexp.MustCompile(`(\d{2})[._/-](\d{2})[._/-](\d{2,4})`)
+	listRE            = regexp.MustCompile(`^(?i)(\d+(?:(?:\s*(?:[.,]|&amp;|&|AND)\s*|\s+)\d+)+(?:\s*[.,])?)\s+(.*\S)\s*$`)
+	leadingListTailRE = regexp.MustCompile(`^(?i)(?:[.,]|&amp;|&|AND)\s*(\d+)\s+(.*\S)\s*$`)
+	numberRE          = regexp.MustCompile(`\d+`)
+	suffixRE          = regexp.MustCompile(`(?i)\b(?:STREET|ST|AVENUE|AVE|ROAD|RD|WAY|DRIVE|DR|LANE|LN|PLACE|PL|CIRCLE|CIR|BOULEVARD|BLVD|HIGHWAY|HWY|TERRACE|TER|TERR|PARKWAY|PKWY|COURT|CT|COVE|SQUARE|SQ|APTS|APT|CONDOS|CONDO|UNITS|UNIT|SUITES|SUITE|STE|FLOOR|FL|FELLSWAY|BROADWAY|GREENWAY|EXPRESSWAY|SPEEDWAY)\b`)
+	unitModifierRE    = regexp.MustCompile(`^(?i)(?:\s*#?\s*\d+[A-Z]?|\s+[A-Z\d]\b)`)
+	locModifierRE     = regexp.MustCompile(`^(?i)(?:\s+(?:MANY|ALL)\s+(?:HOMES|HOUSES|APTS|CONDOS|UNITS)\b)`)
+	statusStartRE     = regexp.MustCompile(`^(?i)\s*(?:IS|WAS|HAS|ARE|BE|TOO|WILL)\b`)
+	precedingRejectRE = regexp.MustCompile(`(?i)\b(?:WHOLE|OF|ON|IN|THE|BOTH|EACH|EVERY|THIS|THAT|TO|FOR|BY)\s*$`)
+	directionalRE     = regexp.MustCompile(`^(?i)\s+(?:WEST|W|EAST|E|NORTH|N|SOUTH|S)\b`)
+	signatureLineRE   = regexp.MustCompile(`^(?:regards|best|sincerely|thank you|thanks)[,!.\s]*$`)
 )
 
 type issuePattern struct {
-	Type    string
+	Label   string
 	Pattern string
 }
 
 var issuePatterns = []issuePattern{
-	{Type: "msw_and_recyc_not_out", Pattern: "MSW AND RECYC NOT OUT"},
-	{Type: "recyc_and_msw_not_out", Pattern: "RECYC AND MSW NOT OUT"},
-	{Type: "bulk_item_not_out", Pattern: "BULK ITEM NOT OUT"},
-	{Type: "bedframe_and_sofa_not_out", Pattern: "BEDFRAME AND SOFA NOT OUT"},
-	{Type: "recyc_not_out", Pattern: "RECYC NOT OUT"},
-	{Type: "msw_not_out", Pattern: "MSW NOT OUT"},
-	{Type: "fridge_not_out", Pattern: "FRIDGE NOT OUT"},
-	{Type: "sofa_not_out", Pattern: "SOFA NOT OUT"},
-	{Type: "unable_to_service_msw", Pattern: "UNABLE TO SVC MSW"},
-	{Type: "not_serviced", Pattern: "NOT SVCD"},
+	{Label: "msw_and_recyc_not_out", Pattern: "MSW AND RECYC NOT OUT"},
+	{Label: "msw_and_recyc_not_out", Pattern: "RECYC AND MSW NOT OUT"},
+	{Label: "recyc_not_out", Pattern: "RECYC NOT OUT"},
+	{Label: "recyc_not_out", Pattern: "RECYCLE NOT OUT"},
+	{Label: "recyc_not_out", Pattern: "RECYCCLE NOT OUT"},
+	{Label: "recyc_not_out", Pattern: "NOT OUT RECYC"},
+	{Label: "msw_not_out", Pattern: "MSW NOT OUT"},
+	{Label: "msw_not_out", Pattern: "TRASH NOT OUT"},
+	{Label: "special_item_not_out", Pattern: "BULK ITEM NOT OUT"},
+	{Label: "special_item_not_out", Pattern: "BEDFRAME AND SOFA NOT OUT"},
+	{Label: "special_item_not_out", Pattern: "FRIDGE NOT OUT"},
+	{Label: "special_item_not_out", Pattern: "SOFA NOT OUT"},
 }
 
 type record struct {
@@ -50,7 +62,8 @@ type record struct {
 	RowInMessage int
 	RawEntry     string
 	LocationHint string
-	IssueType    string
+	ParsedIssue  string
+	Label        string
 	IssueTime    string
 }
 
@@ -59,6 +72,11 @@ type messageMetadata struct {
 	Subject     string
 	MessageDate time.Time
 	Body        string
+}
+
+type parseSummary struct {
+	ParsedFiles  int
+	SkippedFiles int
 }
 
 func main() {
@@ -83,7 +101,7 @@ func main() {
 		log.Fatalf("collect input paths: %v", err)
 	}
 
-	records, err := parseInputPaths(inputPaths)
+	records, summary, err := parseInputPaths(inputPaths)
 	if err != nil {
 		log.Fatalf("parse inputs: %v", err)
 	}
@@ -94,6 +112,8 @@ func main() {
 	if err := writeCSV(*output, records); err != nil {
 		log.Fatalf("write csv: %v", err)
 	}
+
+	log.Printf("parsed %d files into %d rows; skipped %d files", summary.ParsedFiles, len(records), summary.SkippedFiles)
 }
 
 func loadMessage(path string) (messageMetadata, error) {
@@ -132,6 +152,28 @@ func loadMessage(path string) (messageMetadata, error) {
 	}, nil
 }
 
+func expandEntries(line string) []string {
+	if listMatches := listRE.FindStringSubmatch(line); listMatches != nil {
+		numbers := numberRE.FindAllString(listMatches[1], -1)
+		remainder := listMatches[2]
+		for {
+			tailMatches := leadingListTailRE.FindStringSubmatch(remainder)
+			if tailMatches == nil {
+				break
+			}
+			numbers = append(numbers, tailMatches[1])
+			remainder = tailMatches[2]
+		}
+		entries := make([]string, 0, len(numbers))
+		for _, num := range numbers {
+			entries = append(entries, num+" "+remainder)
+		}
+		return entries
+	}
+
+	return []string{line}
+}
+
 func parseRecords(meta messageMetadata) []record {
 	lines := cleanLines(meta.Body)
 	records := make([]record, 0)
@@ -140,13 +182,6 @@ func parseRecords(meta messageMetadata) []record {
 	rowInMessage := 0
 
 	for _, line := range lines {
-		if isFooterLine(line) {
-			break
-		}
-		if strings.EqualFold(line, "Please see tags called in today:") {
-			continue
-		}
-
 		if matches := timestampLineRE.FindStringSubmatch(line); matches != nil {
 			parsedTime, err := time.ParseInLocation("01/02/2006 15:04:05", matches[1], time.Local)
 			if err == nil {
@@ -155,25 +190,37 @@ func parseRecords(meta messageMetadata) []record {
 			currentDispatcher = matches[2]
 			continue
 		}
+		if isFooterLine(line) {
+			if currentTime.IsZero() {
+				continue
+			}
+			break
+		}
+		if strings.EqualFold(line, "Please see tags called in today:") {
+			continue
+		}
 
 		if currentTime.IsZero() {
 			continue
 		}
 
 		rowInMessage++
-		locationHint, issueType, issueTime := classifyEntry(line)
-		records = append(records, record{
-			SourceFile:   meta.SourceFile,
-			Subject:      meta.Subject,
-			MessageDate:  formatTime(meta.MessageDate),
-			ReportedAt:   currentTime.Format(time.RFC3339),
-			Dispatcher:   currentDispatcher,
-			RowInMessage: rowInMessage,
-			RawEntry:     line,
-			LocationHint: locationHint,
-			IssueType:    issueType,
-			IssueTime:    issueTime,
-		})
+		for _, entry := range expandEntries(line) {
+			locationHint, parsedIssue, label, issueTime := classifyEntry(entry)
+			records = append(records, record{
+				SourceFile:   meta.SourceFile,
+				Subject:      meta.Subject,
+				MessageDate:  formatTime(meta.MessageDate),
+				ReportedAt:   currentTime.Format(time.RFC3339),
+				Dispatcher:   currentDispatcher,
+				RowInMessage: rowInMessage,
+				RawEntry:     entry,
+				LocationHint: locationHint,
+				ParsedIssue:  parsedIssue,
+				Label:        label,
+				IssueTime:    issueTime,
+			})
+		}
 	}
 
 	return records
@@ -213,31 +260,36 @@ func collectInputPaths(input string) ([]string, error) {
 	return paths, nil
 }
 
-func parseInputPaths(paths []string) ([]record, error) {
+func parseInputPaths(paths []string) ([]record, parseSummary, error) {
 	allRecords := make([]record, 0)
+	summary := parseSummary{}
 	isBatch := len(paths) > 1
 	for _, path := range paths {
 		metadata, err := loadMessage(path)
 		if err != nil {
 			if isBatch {
+				summary.SkippedFiles++
 				log.Printf("warning: skipping %s: %v", path, err)
 				continue
 			}
-			return nil, fmt.Errorf("%s: %w", path, err)
+			return nil, parseSummary{}, fmt.Errorf("%s: %w", path, err)
 		}
 
 		records := parseRecords(metadata)
 		if len(records) == 0 {
 			if isBatch {
+				summary.SkippedFiles++
 				log.Printf("warning: skipping %s: no structured rows found", path)
 				continue
 			}
-			return nil, fmt.Errorf("%s: no structured rows found", path)
+			return nil, parseSummary{}, fmt.Errorf("%s: no structured rows found", path)
 		}
+
+		summary.ParsedFiles++
 		allRecords = append(allRecords, records...)
 	}
 
-	return allRecords, nil
+	return allRecords, summary, nil
 }
 
 func cleanLines(body string) []string {
@@ -259,6 +311,8 @@ func cleanLines(body string) []string {
 func isFooterLine(line string) bool {
 	lower := strings.ToLower(strings.TrimSpace(line))
 	switch {
+	case signatureLineRE.MatchString(lower):
+		return true
 	case lower == "sheri sawallich":
 		return true
 	case strings.Contains(lower, "dispatcher/router"):
@@ -274,28 +328,176 @@ func isFooterLine(line string) bool {
 	}
 }
 
-func classifyEntry(raw string) (locationHint string, issueType string, issueTime string) {
+func findLastAddressIndex(cleaned string) int {
+	matches := suffixRE.FindAllStringSubmatchIndex(cleaned, -1)
+	if len(matches) == 0 {
+		return -1
+	}
+
+	for i := len(matches) - 1; i >= 0; i-- {
+		match := matches[i]
+		start := match[0]
+		end := match[1]
+
+		suffixStr := strings.ToUpper(cleaned[start:end])
+		isUnitSuffix := false
+		unitSuffixes := []string{"APT", "APTS", "UNIT", "UNITS", "CONDOS", "CONDO", "SUITE", "SUITES", "STE", "FL", "FLOOR"}
+		for _, us := range unitSuffixes {
+			if suffixStr == us {
+				isUnitSuffix = true
+				break
+			}
+		}
+
+		if isUnitSuffix {
+			rem := cleaned[end:]
+			if modifierMatches := unitModifierRE.FindStringIndex(rem); modifierMatches != nil && modifierMatches[0] == 0 {
+				end += modifierMatches[1]
+			}
+		}
+
+		// Check if a location modifier follows (e.g. "MANY HOMES")
+		rem := cleaned[end:]
+		if locModifierMatches := locModifierRE.FindStringIndex(rem); locModifierMatches != nil && locModifierMatches[0] == 0 {
+			end += locModifierMatches[1]
+			rem = cleaned[end:]
+		}
+
+		// Check if a directional follows (e.g. "WEST", "W", "EAST", "E")
+		if directionalMatches := directionalRE.FindStringIndex(rem); directionalMatches != nil && directionalMatches[0] == 0 {
+			end += directionalMatches[1]
+			rem = cleaned[end:]
+		}
+
+		// Verify this is a valid address suffix by checking preceding text and remainder
+		preceding := cleaned[:start]
+		if precedingRejectRE.MatchString(preceding) {
+			continue
+		}
+		if statusStartRE.MatchString(rem) {
+			continue
+		}
+
+		return end
+	}
+
+	return -1
+}
+
+func splitAddressAndStatus(raw string) (address string, status string) {
+	cleaned := strings.TrimSpace(raw)
+	cleaned = strings.ReplaceAll(cleaned, "–", "-")
+	cleaned = strings.ReplaceAll(cleaned, "—", "-")
+
+	// 1. Split based on the LAST address suffix.
+	endIdx := findLastAddressIndex(cleaned)
+	if endIdx != -1 {
+		address = strings.TrimSpace(cleaned[:endIdx])
+		status = strings.TrimSpace(cleaned[endIdx:])
+	} else {
+		// 2. If no suffix matches, check if we contain any known issue pattern.
+		// E.g., for suffix-less addresses like "23 AND 25 KILSYTH MSW AND RECYC NOT OUT"
+		upper := strings.ToUpper(cleaned)
+		earliestIdx := -1
+		for _, candidate := range issuePatterns {
+			idx := strings.Index(upper, candidate.Pattern)
+			if idx != -1 {
+				if earliestIdx == -1 || idx < earliestIdx {
+					earliestIdx = idx
+				}
+			}
+		}
+
+		if earliestIdx != -1 {
+			address = strings.TrimSpace(cleaned[:earliestIdx])
+			status = strings.TrimSpace(cleaned[earliestIdx:])
+		} else {
+			// 3. Fallback: split by first comma, semicolon, or space-dash-space
+			firstDelim := -1
+			delimLen := 0
+
+			if idx := strings.Index(cleaned, " - "); idx != -1 {
+				firstDelim = idx
+				delimLen = 3
+			}
+
+			for i, r := range cleaned {
+				if r == ',' || r == ';' {
+					if firstDelim == -1 || i < firstDelim {
+						firstDelim = i
+						delimLen = 1
+					}
+				}
+			}
+
+			if firstDelim != -1 {
+				address = strings.TrimSpace(cleaned[:firstDelim])
+				status = strings.TrimSpace(cleaned[firstDelim+delimLen:])
+			} else {
+				return cleaned, ""
+			}
+		}
+	}
+
+	address = strings.TrimFunc(address, func(r rune) bool {
+		return r == ',' || r == '-' || r == ';' || r == ' ' || r == '.'
+	})
+	status = strings.TrimFunc(status, func(r rune) bool {
+		return r == ',' || r == '-' || r == ';' || r == ' ' || r == '.'
+	})
+
+	return address, status
+}
+
+func normalizeIssueLabel(status string) string {
+	s := strings.TrimSpace(status)
+	sUpper := strings.ToUpper(s)
+
+	for _, candidate := range issuePatterns {
+		if strings.Contains(sUpper, candidate.Pattern) {
+			return candidate.Label
+		}
+	}
+
+	s = strings.ReplaceAll(sUpper, "NOT SVCD", "NOT SERVICED")
+	s = strings.ReplaceAll(s, "UNABLE TO SVC", "UNABLE TO SERVICE")
+
+	var sb strings.Builder
+	lastWasUnderscore := false
+	for _, r := range s {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			sb.WriteRune(r)
+			lastWasUnderscore = false
+		} else if !lastWasUnderscore && sb.Len() > 0 {
+			sb.WriteRune('_')
+			lastWasUnderscore = true
+		}
+	}
+
+	label := strings.Trim(strings.ToLower(sb.String()), "_")
+	if strings.Contains(label, "blocked") {
+		return "blocked"
+	}
+	if strings.HasSuffix(label, "_not_out") {
+		return "special_item_not_out"
+	}
+
+	return "other"
+}
+
+func classifyEntry(raw string) (locationHint string, parsedIssue string, label string, issueTime string) {
 	cleaned := strings.TrimSpace(raw)
 	if matches := entryTimeRE.FindStringSubmatch(cleaned); matches != nil {
 		issueTime = matches[1]
 		cleaned = strings.TrimSpace(cleaned[:len(cleaned)-len(matches[0])])
 	}
 
-	upper := strings.ToUpper(cleaned)
-	for _, candidate := range issuePatterns {
-		idx := strings.Index(upper, candidate.Pattern)
-		if idx == -1 {
-			continue
-		}
-
-		prefix := strings.TrimSpace(strings.Trim(cleaned[:idx], ","))
-		if prefix == "" {
-			prefix = cleaned
-		}
-		return prefix, candidate.Type, issueTime
+	address, status := splitAddressAndStatus(cleaned)
+	if status == "" {
+		return address, "", "", issueTime
 	}
 
-	return cleaned, "", issueTime
+	return address, status, normalizeIssueLabel(status), issueTime
 }
 
 func writeCSV(path string, records []record) error {
@@ -320,8 +522,9 @@ func writeCSV(path string, records []record) error {
 		"dispatcher",
 		"row_in_message",
 		"raw_entry",
-		"location_hint",
-		"issue_type",
+		"location",
+		"issue",
+		"label",
 		"issue_time",
 	}
 	if err := writer.Write(headers); err != nil {
@@ -338,7 +541,8 @@ func writeCSV(path string, records []record) error {
 			fmt.Sprintf("%d", rec.RowInMessage),
 			rec.RawEntry,
 			rec.LocationHint,
-			rec.IssueType,
+			rec.ParsedIssue,
+			rec.Label,
 			rec.IssueTime,
 		}
 		if err := writer.Write(row); err != nil {

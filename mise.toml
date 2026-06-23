@@ -7,8 +7,13 @@ depends = ["build-darwin", "build-windows"]
 
 [tasks.build-darwin]
 description = "Build and package macOS binaries (separate arm64 and amd64 bundles)"
-run = "fyne-cross darwin -arch arm64,amd64"
+run = "./scripts/build-darwin.sh"
 
 [tasks.build-windows]
 description = "Build and package Windows binary (amd64)"
-run = "fyne-cross windows -arch amd64"
+run = """
+fyne-cross windows -arch amd64
+mkdir -p bin
+cp fyne-cross/bin/windows-amd64/will-msg.exe bin/will-msg-windows-amd64.exe
+cp fyne-cross/dist/windows-amd64/will-msg.exe.zip bin/will-msg-windows-amd64.zip
+"""

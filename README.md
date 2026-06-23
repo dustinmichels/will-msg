@@ -37,6 +37,16 @@ mise run build-darwin
 mise run build-windows
 ```
 
+The output binaries and packaged distributions will be placed in the `bin/` directory with platform-specific names:
+- `bin/will-msg-macos-arm64` (macOS Apple Silicon binary)
+- `bin/will-msg-macos-arm64.app` (macOS Apple Silicon app bundle)
+- `bin/will-msg-macos-arm64.zip` (macOS Apple Silicon zipped app bundle)
+- `bin/will-msg-macos-amd64` (macOS Intel binary)
+- `bin/will-msg-macos-amd64.app` (macOS Intel app bundle)
+- `bin/will-msg-macos-amd64.zip` (macOS Intel zipped app bundle)
+- `bin/will-msg-windows-amd64.exe` (Windows binary)
+- `bin/will-msg-windows-amd64.zip` (Windows packaged zip)
+
 ### Building Manually
 
 Alternatively, you can run the commands directly:

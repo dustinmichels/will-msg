@@ -212,8 +212,8 @@ func TestFindMsgFiles_Zip(t *testing.T) {
 		t.Fatalf("parseMsgSources error: %v", err)
 	}
 
-	if len(records) != 4 {
-		t.Errorf("expected 4 records, got %d", len(records))
+	if len(records) != 5 {
+		t.Errorf("expected 5 records, got %d", len(records))
 	}
 
 	for _, rec := range records {
