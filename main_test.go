@@ -31,6 +31,149 @@ func TestParseRecordsFromSampleMessage(t *testing.T) {
 	}
 }
 
+func TestParseRecordsRejoinsWrappedPlaintextRows(t *testing.T) {
+	meta := messageMetadata{
+		SourceFile: "test.msg",
+		Subject:    "Test subject",
+		Body: strings.Join([]string{
+			"03/02/2026 07:53:10 SSAWALLI",
+			"252,248, 236, 224, 196, 192, 190 , 172, 164, 156, 148, 136 AND 132 SPRI",
+			"NG ST RECYC NOT OUT",
+			"03/02/2026 15:19:39 SSAWALLI",
+			"EVANS ST - TOO MANY PARKED CARS ON BOTH CORNERS AND END OF STREET, UNABL E",
+			"TO SVC TRASH",
+		}, "\n"),
+	}
+
+	records := parseRecords(meta)
+	if len(records) != 14 {
+		t.Fatalf("expected 14 records, got %d", len(records))
+	}
+
+	wantSpring := []string{
+		"252 SPRING ST RECYC NOT OUT",
+		"248 SPRING ST RECYC NOT OUT",
+		"236 SPRING ST RECYC NOT OUT",
+		"224 SPRING ST RECYC NOT OUT",
+		"196 SPRING ST RECYC NOT OUT",
+		"192 SPRING ST RECYC NOT OUT",
+		"190 SPRING ST RECYC NOT OUT",
+		"172 SPRING ST RECYC NOT OUT",
+		"164 SPRING ST RECYC NOT OUT",
+		"156 SPRING ST RECYC NOT OUT",
+		"148 SPRING ST RECYC NOT OUT",
+		"136 SPRING ST RECYC NOT OUT",
+		"132 SPRING ST RECYC NOT OUT",
+	}
+	for i, want := range wantSpring {
+		if records[i].RawEntry != want {
+			t.Fatalf("records[%d]: expected %q, got %q", i, want, records[i].RawEntry)
+		}
+		if records[i].LocationHint != strings.TrimSuffix(want, " RECYC NOT OUT") {
+			t.Fatalf("records[%d]: expected location %q, got %q", i, strings.TrimSuffix(want, " RECYC NOT OUT"), records[i].LocationHint)
+		}
+	}
+
+	wantNarrative := "EVANS ST - TOO MANY PARKED CARS ON BOTH CORNERS AND END OF STREET, UNABLE TO SVC TRASH"
+	if records[len(records)-1].RawEntry != wantNarrative {
+		t.Fatalf("expected wrapped narrative to rejoin as %q, got %q", wantNarrative, records[len(records)-1].RawEntry)
+	}
+}
+
+func TestParseRecordsRejoinsWrappedRealMessage(t *testing.T) {
+	meta, err := loadMessage(filepath.Join("data-new", "MEDFORD TAGS 03_02_26.msg"))
+	if err != nil {
+		t.Fatalf("loadMessage: %v", err)
+	}
+
+	records := parseRecords(meta)
+	if len(records) != 23 {
+		t.Fatalf("expected 23 records, got %d", len(records))
+	}
+	if records[0].RawEntry != "252 SPRING ST RECYC NOT OUT" {
+		t.Fatalf("unexpected first wrapped entry %q", records[0].RawEntry)
+	}
+	if records[len(records)-1].RawEntry != "EVANS ST - TOO MANY PARKED CARS ON BOTH CORNERS AND END OF STREET, UNABLE TO SVC TRASH" {
+		t.Fatalf("unexpected wrapped final entry %q", records[len(records)-1].RawEntry)
+	}
+
+	for _, rec := range records {
+		if rec.RawEntry == "NG ST RECYC NOT OUT" || strings.HasSuffix(rec.RawEntry, " SPRI") {
+			t.Fatalf("wrapped fragment leaked into parsed output: %q", rec.RawEntry)
+		}
+	}
+}
+
+func TestParseRecordsSplitsWideGapAddresses(t *testing.T) {
+	meta := messageMetadata{
+		SourceFile: "test.msg",
+		Subject:    "Test subject",
+		// Two addresses separated by a wide column gap, as seen in real emails.
+		// normalizeBodyLine must NOT collapse them into one entry.
+		Body: "07/01/2025 14:34:19\n" +
+			"4 MAYNARD ST                                    171B FOREST ST",
+	}
+
+	records := parseRecords(meta)
+	if len(records) != 2 {
+		entries := make([]string, len(records))
+		for i, r := range records {
+			entries[i] = r.RawEntry
+		}
+		t.Fatalf("expected 2 records for wide-gap line, got %d: %v", len(records), entries)
+	}
+	if records[0].RawEntry != "4 MAYNARD ST" {
+		t.Errorf("records[0]: expected %q, got %q", "4 MAYNARD ST", records[0].RawEntry)
+	}
+	if records[1].RawEntry != "171B FOREST ST" {
+		t.Errorf("records[1]: expected %q, got %q", "171B FOREST ST", records[1].RawEntry)
+	}
+	for _, r := range records {
+		if r.ParsedIssue != "" || r.Label != "" {
+			t.Errorf("expected empty issue/label for %q, got issue=%q label=%q",
+				r.RawEntry, r.ParsedIssue, r.Label)
+		}
+	}
+}
+
+func TestParseRecordsTrailingWhitespaceBlocksMerge(t *testing.T) {
+	// A line with trailing whitespace signals a complete standalone entry; the
+	// NEXT line must NOT be merged into it even if it looks like a continuation.
+	//
+	// Both lines are under a single timestamp (no intervening timestamp to
+	// short-circuit isWrappedContinuation). The second line satisfies all
+	// merge preconditions except hadTrailingWhitespace:
+	//   - looksLikeStandaloneEntry == false  (starts with letter, no early suffix)
+	//   - endsWithJoinableFragment == false  (trailing token "REPORTED" > 5 chars)
+	//   - prev label == "other"              (classifyEntry falls through to merge)
+	//
+	// With the fix:    splitOnWideGaps returns raw → hadTrailingWhitespace=true → 2 records.
+	// Without the fix: splitOnWideGaps returns trimmed → hadTrailingWhitespace=false → 1 merged record.
+	meta := messageMetadata{
+		SourceFile: "test.msg",
+		Subject:    "Test subject",
+		Body: "07/01/2025 09:28:01\n" +
+			"23 MAPLE ST DRIVER REPORTED      \n" + // trailing spaces → standalone complete entry
+			"COULD NOT ACCESS PROPERTY",            // non-standalone: letter-start, no early suffix
+	}
+
+	records := parseRecords(meta)
+	if len(records) != 2 {
+		entries := make([]string, len(records))
+		for i, r := range records {
+			entries[i] = r.RawEntry
+		}
+		t.Fatalf("trailing whitespace must block merge; expected 2 records, got %d: %v", len(records), entries)
+	}
+	if records[0].RawEntry != "23 MAPLE ST DRIVER REPORTED" {
+		t.Errorf("records[0]: expected %q, got %q", "23 MAPLE ST DRIVER REPORTED", records[0].RawEntry)
+	}
+	if records[1].RawEntry != "COULD NOT ACCESS PROPERTY" {
+		t.Errorf("records[1]: expected %q, got %q", "COULD NOT ACCESS PROPERTY", records[1].RawEntry)
+	}
+}
+
+
 func TestCollectInputPathsForDirectory(t *testing.T) {
 	paths, err := collectInputPaths("data")
 	if err != nil {
@@ -208,9 +351,23 @@ func TestClassifyEntry(t *testing.T) {
 			expectedTime:  "",
 		},
 		{
+			name:          "strathmore rd blocking toters",
+			input:         "8 STRATHMORE RD - CARS ARE BLOCKING TOTERS MSW NOT SVCD",
+			expectedLoc:   "8 STRATHMORE RD",
+			expectedLabel: "blocked",
+			expectedTime:  "",
+		},
+		{
 			name:          "washington st ac",
 			input:         "198 WASHINGTON ST APT 1, AC NOT OUT",
 			expectedLoc:   "198 WASHINGTON ST APT 1",
+			expectedLabel: "special_item_not_out",
+			expectedTime:  "",
+		},
+		{
+			name:          "hamilton st ac bare date code",
+			input:         "15 HAMILTON ST APT 1 AC- NOT OUT 0909",
+			expectedLoc:   "15 HAMILTON ST APT 1",
 			expectedLabel: "special_item_not_out",
 			expectedTime:  "",
 		},
@@ -303,6 +460,55 @@ func TestClassifyEntry(t *testing.T) {
 			input:         "60 PARK ST - ALL UNITS - RECYC NOT OUT",
 			expectedLoc:   "60 PARK ST - ALL UNITS",
 			expectedLabel: "recyc_not_out",
+			expectedTime:  "",
+		},
+		{
+			name:          "recy contam w non acceptable items left behind",
+			input:         "123 MAIN ST RECY CONTAM W NONN ACCEPTABLE ITEMS IN BIN- LEFT BHND",
+			expectedLoc:   "123 MAIN ST",
+			expectedLabel: "recy_contaminated",
+			expectedTime:  "",
+		},
+		{
+			name:          "recy contam w unacceptable materials left behind",
+			input:         "45 BROADWAY RECY CONTAM W UNACCEPTABLE MATERIALS IN BIN- LEFT BHND",
+			expectedLoc:   "45 BROADWAY",
+			expectedLabel: "recy_contaminated",
+			expectedTime:  "",
+		},
+		{
+			name:          "recy contam w wood left behind",
+			input:         "12 COLBY ST RECY CONTAM W WOOD IN BIN- LEFT BHND",
+			expectedLoc:   "12 COLBY ST",
+			expectedLabel: "recy_contaminated",
+			expectedTime:  "",
+		},
+		{
+			name:          "recycle contam w trash left behind",
+			input:         "78 OAK AVE RECYCLE CONTAM W TRASH IN BIN- LEFT BHND",
+			expectedLoc:   "78 OAK AVE",
+			expectedLabel: "recy_contaminated",
+			expectedTime:  "",
+		},
+		{
+			name:          "contaminated recyc",
+			input:         "99 ELM RD CONTAMINATED RECYC",
+			expectedLoc:   "99 ELM RD",
+			expectedLabel: "recy_contaminated",
+			expectedTime:  "",
+		},
+		{
+			name:          "recycling contaminated not picked up",
+			input:         "14 MAPLE LN, RECYCLING CONTAMINATED, NOT PICKED UP",
+			expectedLoc:   "14 MAPLE LN",
+			expectedLabel: "recy_contaminated",
+			expectedTime:  "",
+		},
+		{
+			name:          "contaminated recycling",
+			input:         "250 HIGH ST CONTAMINATED RECYCLING",
+			expectedLoc:   "250 HIGH ST",
+			expectedLabel: "recy_contaminated",
 			expectedTime:  "",
 		},
 	}
@@ -444,6 +650,35 @@ func TestParseRecordsSplitList(t *testing.T) {
 					rawEntry:     "476 BORN COURT APTS, BROADWAY ST, MSW AND RECYC NOT OUT",
 					locationHint: "476 BORN COURT APTS, BROADWAY ST",
 					label:        "msw_and_recyc_not_out",
+					issueTime:    "",
+				},
+			},
+		},
+		{
+			name: "blocking toters list stays blocked",
+			body: "01/02/2026 08:30:00 dispatcher1\n8, 10 AND 12 STRATHMORE RD - CARS ARE BLOCKING TOTERS MSW NOT SVCD",
+			expected: []struct {
+				rawEntry     string
+				locationHint string
+				label        string
+				issueTime    string
+			}{
+				{
+					rawEntry:     "8 STRATHMORE RD - CARS ARE BLOCKING TOTERS MSW NOT SVCD",
+					locationHint: "8 STRATHMORE RD",
+					label:        "blocked",
+					issueTime:    "",
+				},
+				{
+					rawEntry:     "10 STRATHMORE RD - CARS ARE BLOCKING TOTERS MSW NOT SVCD",
+					locationHint: "10 STRATHMORE RD",
+					label:        "blocked",
+					issueTime:    "",
+				},
+				{
+					rawEntry:     "12 STRATHMORE RD - CARS ARE BLOCKING TOTERS MSW NOT SVCD",
+					locationHint: "12 STRATHMORE RD",
+					label:        "blocked",
 					issueTime:    "",
 				},
 			},
@@ -911,4 +1146,61 @@ func TestValidateAllCSVSamples(t *testing.T) {
 	}
 
 	t.Logf("Validated %d CSV rows. Total failures: %d", len(records)-1, failCount)
+}
+
+func TestParseRecordsRejoinsWrappedParagraph(t *testing.T) {
+	meta := messageMetadata{
+		SourceFile: "test.msg",
+		Subject:    "Test subject",
+		Body: "09/10/2025 13:02:32\n" +
+			"84 BICKNELL RD SCHEDULED WGC TKT#296774 ONLINE FOR A FRIDGE PICK UP AND  \n" +
+			"WHEN THEY SCHEDULE ONLINE THE INSTRUCTIONS ARE GIVEN TO ENSURE THE INSID \n" +
+			"ES ARE BUNDLED TOGETHER AND SAFEY STORED INIDE TO PREVENT ACCIDENTS BUT  \n" +
+			"WHEN DRVR ARRIVED HERE THE FRIDGE WAS LAYING ON THE LAWN & WHEN HE WENT  \n" +
+			"TO STAND IT UP AND LIFT IT THE INSERTS ALONG W GLASS FELL OUT/SPILLED ON \n" +
+			"TO THE LAWN/DRIVEWAY AREA-SAME SPOT THE FRIDGE WAS IN- DRIVER DID NOT CL \n" +
+			"EAN UP AND IS NOT RESPONSIBLE AS CUST DISREGARDED THE INSTRUCTIONS AND T \n" +
+			"HESE ITEMS ARE NOT ACCEPTABLE FOR PICK UP-0 WHITE GOOD PICK UP TURNED IN \n" +
+			"TO A SAFETY CONCERN WHEN GLASS FELL OUT AND BROKE AS THEY WERE GETTING READY TO LIFT     \n" +
+			"DRIVER SOUNDED UPSET & PANICKED      ",
+	}
+
+	records := parseRecords(meta)
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(records))
+	}
+
+	want := "84 BICKNELL RD SCHEDULED WGC TKT#296774 ONLINE FOR A FRIDGE PICK UP AND WHEN THEY SCHEDULE ONLINE THE INSTRUCTIONS ARE GIVEN TO ENSURE THE INSIDES ARE BUNDLED TOGETHER AND SAFEY STORED INIDE TO PREVENT ACCIDENTS BUT WHEN DRVR ARRIVED HERE THE FRIDGE WAS LAYING ON THE LAWN & WHEN HE WENT TO STAND IT UP AND LIFT IT THE INSERTS ALONG W GLASS FELL OUT/SPILLED ON TO THE LAWN/DRIVEWAY AREA-SAME SPOT THE FRIDGE WAS IN- DRIVER DID NOT CLEAN UP AND IS NOT RESPONSIBLE AS CUST DISREGARDED THE INSTRUCTIONS AND THESE ITEMS ARE NOT ACCEPTABLE FOR PICK UP-0 WHITE GOOD PICK UP TURNED IN TO A SAFETY CONCERN WHEN GLASS FELL OUT AND BROKE AS THEY WERE GETTING READY TO LIFT DRIVER SOUNDED UPSET & PANICKED"
+	if records[0].RawEntry != want {
+		t.Errorf("expected joined entry:\n%q\ngot:\n%q", want, records[0].RawEntry)
+	}
+	if records[0].LocationHint != "84 BICKNELL RD" {
+		t.Errorf("expected LocationHint %q, got %q", "84 BICKNELL RD", records[0].LocationHint)
+	}
+}
+
+
+func TestParseRecordsMedfordTags(t *testing.T) {
+	meta := messageMetadata{
+		SourceFile: "test.msg",
+		Subject:    "Test subject",
+		Body: "09/22/2025 11:29:05\n" +
+			"73 MEDFORD ST BULK ITEM NOT OUT ON 0919 AND DRVR CHECKED EVERYWHERE CURB \n\n" +
+			"SIDE                                                                     \n" +
+			"73 MEDFORD ST BULK MPU NOT OUT AT CURB - ALL ITEMS MUST BE OUT AT CURB A \n\n" +
+			"ND NOT ON PROPERTY                                                       ",
+	}
+
+	for i, raw := range strings.Split(meta.Body, "\n") {
+		trimmed := strings.TrimSpace(raw)
+		t.Logf("Line %d: %q, standalone=%v", i, trimmed, looksLikeStandaloneEntry(trimmed))
+	}
+
+	records := parseRecords(meta)
+	for i, r := range records {
+		t.Logf("record %d: %q", i, r.RawEntry)
+	}
+	if len(records) != 2 {
+		t.Fatalf("expected 2 records, got %d", len(records))
+	}
 }

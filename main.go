@@ -30,7 +30,9 @@ var (
 	statusStartRE     = regexp.MustCompile(`^(?i)\s*(?:IS|WAS|HAS|ARE|BE|TOO|WILL)\b`)
 	precedingRejectRE = regexp.MustCompile(`(?i)\b(?:WHOLE|OF|ON|IN|THE|BOTH|EACH|EVERY|THIS|THAT|TO|FOR|BY)\s*$`)
 	directionalRE     = regexp.MustCompile(`^(?i)\s+(?:WEST|W|EAST|E|NORTH|N|SOUTH|S)\b`)
+	blockedStatusRE   = regexp.MustCompile(`\bBLOCK(?:ED|ING|S)?\b`)
 	signatureLineRE   = regexp.MustCompile(`^(?:regards|best|sincerely|thank you|thanks)[,!.\s]*$`)
+	wideGapRE          = regexp.MustCompile(`\s{3,}`)
 )
 
 type issuePattern struct {
@@ -51,6 +53,14 @@ var issuePatterns = []issuePattern{
 	{Label: "special_item_not_out", Pattern: "BEDFRAME AND SOFA NOT OUT"},
 	{Label: "special_item_not_out", Pattern: "FRIDGE NOT OUT"},
 	{Label: "special_item_not_out", Pattern: "SOFA NOT OUT"},
+	{Label: "recy_contaminated", Pattern: "RECY CONTAM"},
+	{Label: "recy_contaminated", Pattern: "RECYC CONTAM"},
+	{Label: "recy_contaminated", Pattern: "RECYCLE CONTAM"},
+	{Label: "recy_contaminated", Pattern: "RECYCLING CONTAM"},
+	{Label: "recy_contaminated", Pattern: "CONTAMINATED RECYC"},
+	{Label: "recy_contaminated", Pattern: "CONTAMINATED RECYCLE"},
+	{Label: "recy_contaminated", Pattern: "CONTAMINATED RECYCLING"},
+	{Label: "recy_contaminated", Pattern: "RECYCLING CONTAMINATED"},
 }
 
 type record struct {
@@ -292,20 +302,229 @@ func parseInputPaths(paths []string) ([]record, parseSummary, error) {
 	return allRecords, summary, nil
 }
 
+type normalizedBodyLine struct {
+	text                 string
+	hadTrailingWhitespace bool
+}
+
 func cleanLines(body string) []string {
 	body = strings.ReplaceAll(body, "\r\n", "\n")
 	body = strings.ReplaceAll(body, "\r", "\n")
 
 	lines := strings.Split(body, "\n")
-	cleaned := make([]string, 0, len(lines))
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+	cleaned := make([]normalizedBodyLine, 0, len(lines))
+	for _, raw := range lines {
+		for _, seg := range splitOnWideGaps(raw) {
+			line := normalizeBodyLine(seg)
+			if line.text == "" {
+				continue
+			}
+			if len(cleaned) > 0 && isWrappedContinuation(cleaned[len(cleaned)-1], line) {
+				cleaned[len(cleaned)-1] = mergeWrappedLine(cleaned[len(cleaned)-1], line)
+				continue
+			}
+			cleaned = append(cleaned, line)
 		}
-		cleaned = append(cleaned, strings.Join(strings.Fields(line), " "))
 	}
-	return cleaned
+
+	result := make([]string, 0, len(cleaned))
+	for _, line := range cleaned {
+		result = append(result, line.text)
+	}
+	return result
+}
+
+func normalizeBodyLine(raw string) normalizedBodyLine {
+	trimmedRight := strings.TrimRight(raw, " \t")
+	line := strings.TrimSpace(trimmedRight)
+	if line == "" {
+		return normalizedBodyLine{}
+	}
+	return normalizedBodyLine{
+		text:                 strings.Join(strings.Fields(line), " "),
+		hadTrailingWhitespace: len(raw)-len(trimmedRight) >= 6,
+	}
+}
+
+// splitOnWideGaps splits raw on runs of 2+ whitespace characters, turning
+// column-layout lines like "4 MAYNARD ST          171B FOREST ST" into
+// separate segments before whitespace is collapsed by normalizeBodyLine.
+// Timestamp, intro, and footer lines are returned as-is so they are never
+// fragmented.
+func splitOnWideGaps(raw string) []string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	if timestampLineRE.MatchString(trimmed) || isIntroLine(trimmed) || isFooterLine(trimmed) {
+		return []string{raw}
+	}
+	parts := wideGapRE.Split(trimmed, -1)
+	out := parts[:0]
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	// Single segment: no real gap found. Return the original raw string so
+	// normalizeBodyLine can still detect hadTrailingWhitespace correctly.
+	if len(out) <= 1 {
+		return []string{raw}
+	}
+	return out
+}
+
+func isWrappedContinuation(prev normalizedBodyLine, cur normalizedBodyLine) bool {
+	switch {
+	case prev.text == "", cur.text == "":
+		return false
+	case timestampLineRE.MatchString(prev.text), timestampLineRE.MatchString(cur.text):
+		return false
+	case isFooterLine(prev.text), isFooterLine(cur.text):
+		return false
+	case isIntroLine(prev.text), isIntroLine(cur.text):
+		return false
+	case prev.hadTrailingWhitespace:
+		return false
+	}
+
+	if endsWithJoinableFragment(prev.text, cur.text) {
+		return true
+	}
+
+	return !looksLikeStandaloneEntry(cur.text)
+}
+
+func mergeWrappedLine(prev normalizedBodyLine, cur normalizedBodyLine) normalizedBodyLine {
+	text := repairTrailingSplitWord(prev.text)
+	if endsWithJoinableFragment(text, cur.text) {
+		text += cur.text
+	} else {
+		text += " " + cur.text
+	}
+	return normalizedBodyLine{
+		text:                 text,
+		hadTrailingWhitespace: cur.hadTrailingWhitespace,
+	}
+}
+
+func repairTrailingSplitWord(line string) string {
+	fields := strings.Fields(line)
+	if len(fields) < 2 {
+		return line
+	}
+
+	last := strings.Trim(fields[len(fields)-1], ",.;:-")
+	prev := strings.Trim(fields[len(fields)-2], ",.;:-")
+	if len(last) != 1 || len(prev) < 4 || !isUpperWord(last) || !isUpperWord(prev) {
+		return line
+	}
+	if isCommonWord(last) {
+		return line
+	}
+
+	fields[len(fields)-2] += fields[len(fields)-1]
+	fields = fields[:len(fields)-1]
+	return strings.Join(fields, " ")
+}
+
+func endsWithJoinableFragment(prev string, cur string) bool {
+	tail := trailingAlphaToken(prev)
+	head := leadingAlphaToken(cur)
+	if tail == "" || head == "" {
+		return false
+	}
+	if isCommonWord(tail + head) {
+		return true
+	}
+	if isCommonWord(tail) || isCommonWord(head) {
+		return false
+	}
+	return len(tail) >= 1 && len(tail) <= 8 && len(head) >= 1 && len(head) <= 8
+}
+
+func isCommonWord(w string) bool {
+	switch w {
+	case "A", "ABOUT", "AC", "ACS", "ALL", "ALSO", "AN", "AND", "ANY", "APT", "APTS", "ARE", "AS", "AT", "AVE",
+		"BAG", "BAGS", "BE", "BED", "BEDFRAME", "BEHIND", "BHND", "BLOCKED", "BLVD", "BOTH", "BOX", "BOXES", "BOXSPRING", "BROADWAY", "BULK", "BURIED", "BUT", "BY",
+		"CAN", "CANNOT", "CAR", "CARDBOARD", "CARS", "CHECKED", "CIR", "CIRCLE", "CLEAN", "COULD", "COUCH", "COURT", "COVE", "COMPLETED", "CONCERN", "CONDO", "CONDOS", "CONTAM", "CONTAMINATED", "CT", "CURB", "CURBSIDE", "CUST", "CUSTOMER",
+		"DELAY", "DID", "DO", "DONE", "DOWN", "DR", "DRIVER", "DRIVE", "DRVR",
+		"EACH", "EVEN", "EVERY", "EVERYWHERE",
+		"FELLSWAY", "FILLED", "FL", "FLOOR", "FOR", "FRIDGE", "FROM",
+		"GET", "GETTING", "GLASS", "GO", "GOOD", "GOODS", "GREENWAY",
+		"HAD", "HAS", "HAVE", "HE", "HER", "HIS", "HOME", "HOMES", "HOUSE", "HOW", "HWY",
+		"I", "ICE", "IN", "INACCESSIBLE", "INACESSIBLE", "INSIDES", "IS", "IT", "ITEM", "ITEMS", "ITS",
+		"JUST",
+		"LANE", "LAWN", "LEFT", "LIFT", "LN",
+		"MATTRESS", "METAL", "MPU", "MSW",
+		"NO", "NOT",
+		"OF", "ON", "ONE", "ONLY", "ONLINE", "OR", "OTHER", "OUR", "OUT",
+		"PANICKED", "PARKWAY", "PICK", "PKWY", "PL", "PLACE", "PLEASE", "PROPERTY",
+		"RD", "READY", "RECYC", "RECYCLE", "RECYCLING", "ROAD",
+		"SAFETY", "SAME", "SERVICE", "SERVICED", "SHE", "SHOULD", "SIDE", "SNOW", "SNOWBANK", "SOFA", "SOME", "SQ", "SQUARE", "ST", "STE", "STREET", "SUITE", "SUITES", "SVCD",
+		"TER", "TERR", "TERRACE", "THAT", "THE", "THEIR", "THEM", "THEN", "THERE", "THESE", "THEY", "THIS", "THREE", "TICKET", "TKT", "TO", "TOY", "TOYS", "TRASH", "TRUCK", "TWO",
+		"UNABLE", "UNIT", "UNITS", "UP", "UPSET",
+		"VERY",
+		"WAS", "WAY", "WE", "WENT", "WHEN", "WHO", "WILL", "WITH", "WOOD", "WOULD",
+		"YES", "YOU", "YOUR":
+		return true
+	}
+	return false
+}
+
+func trailingAlphaToken(line string) string {
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return ""
+	}
+	token := strings.Trim(fields[len(fields)-1], ",.;:-")
+	if !isUpperWord(token) {
+		return ""
+	}
+	return token
+}
+
+func leadingAlphaToken(line string) string {
+	fields := strings.Fields(line)
+	if len(fields) == 0 {
+		return ""
+	}
+	token := strings.Trim(fields[0], ",.;:-")
+	if !isUpperWord(token) {
+		return ""
+	}
+	return token
+}
+
+func isUpperWord(token string) bool {
+	if token == "" {
+		return false
+	}
+	for _, r := range token {
+		if r < 'A' || r > 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
+func looksLikeStandaloneEntry(line string) bool {
+	if line == "" {
+		return false
+	}
+	if line[0] >= '0' && line[0] <= '9' {
+		return true
+	}
+	if match := suffixRE.FindStringIndex(line); match != nil && match[0] <= 18 {
+		return true
+	}
+	return false
+}
+
+func isIntroLine(line string) bool {
+	lower := strings.ToLower(strings.TrimSpace(line))
+	return strings.HasPrefix(lower, "please see tags called in today") ||
+		strings.HasPrefix(lower, "please find today")
 }
 
 func isFooterLine(line string) bool {
@@ -458,6 +677,9 @@ func normalizeIssueLabel(status string) string {
 			return candidate.Label
 		}
 	}
+	if blockedStatusRE.MatchString(sUpper) {
+		return "blocked"
+	}
 
 	s = strings.ReplaceAll(sUpper, "NOT SVCD", "NOT SERVICED")
 	s = strings.ReplaceAll(s, "UNABLE TO SVC", "UNABLE TO SERVICE")
@@ -475,10 +697,8 @@ func normalizeIssueLabel(status string) string {
 	}
 
 	label := strings.Trim(strings.ToLower(sb.String()), "_")
-	if strings.Contains(label, "blocked") {
-		return "blocked"
-	}
-	if strings.HasSuffix(label, "_not_out") {
+	labelWithoutTrailingDigits := strings.Trim(strings.TrimRight(label, "0123456789"), "_")
+	if strings.HasSuffix(labelWithoutTrailingDigits, "_not_out") {
 		return "special_item_not_out"
 	}
 
