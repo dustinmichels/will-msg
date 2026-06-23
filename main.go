@@ -199,6 +199,9 @@ func collectInputPaths(input string) ([]string, error) {
 		if entry.IsDir() {
 			continue
 		}
+		if shouldIgnore(entry.Name()) {
+			continue
+		}
 		if strings.EqualFold(filepath.Ext(entry.Name()), ".msg") {
 			paths = append(paths, filepath.Join(input, entry.Name()))
 		}

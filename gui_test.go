@@ -75,6 +75,103 @@ func TestFindMsgFiles_Folder(t *testing.T) {
 	}
 }
 
+func TestFindMsgFiles_Folder_WithIgnored(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "test-folder-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp failed: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	validFile1 := filepath.Join(tmpDir, "email1.msg")
+	if err := os.WriteFile(validFile1, []byte("valid"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	validFile2 := filepath.Join(tmpDir, "sub", "email2.msg")
+	if err := os.Mkdir(filepath.Dir(validFile2), 0755); err != nil {
+		t.Fatalf("Mkdir failed: %v", err)
+	}
+	if err := os.WriteFile(validFile2, []byte("valid"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	ignoredFile1 := filepath.Join(tmpDir, "._email1.msg")
+	if err := os.WriteFile(ignoredFile1, []byte("ignored"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	ignoredDir := filepath.Join(tmpDir, "__MACOSX")
+	if err := os.Mkdir(ignoredDir, 0755); err != nil {
+		t.Fatalf("Mkdir failed: %v", err)
+	}
+	ignoredFile2 := filepath.Join(ignoredDir, "email3.msg")
+	if err := os.WriteFile(ignoredFile2, []byte("ignored"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+	ignoredDotDir := filepath.Join(tmpDir, ".git")
+	if err := os.Mkdir(ignoredDotDir, 0755); err != nil {
+		t.Fatalf("Mkdir failed: %v", err)
+	}
+	ignoredFile3 := filepath.Join(ignoredDotDir, "email4.msg")
+	if err := os.WriteFile(ignoredFile3, []byte("ignored"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	sources, err := findMsgFiles(tmpDir)
+	if err != nil {
+		t.Fatalf("findMsgFiles error: %v", err)
+	}
+
+	if len(sources) != 2 {
+		t.Fatalf("expected 2 sources, got %d", len(sources))
+	}
+
+	found1, found2 := false, false
+	for _, src := range sources {
+		base := filepath.Base(src.Path)
+		if base == "email1.msg" {
+			found1 = true
+		} else if base == "email2.msg" {
+			found2 = true
+		} else {
+			t.Errorf("found unexpected file: %q", src.Path)
+		}
+	}
+
+	if !found1 || !found2 {
+		t.Errorf("did not find expected files (email1.msg: %v, email2.msg: %v)", found1, found2)
+	}
+}
+
+func TestFindMsgFiles_HiddenAncestor(t *testing.T) {
+	parentTmpDir, err := os.MkdirTemp("", "test-parent-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp failed: %v", err)
+	}
+	defer os.RemoveAll(parentTmpDir)
+
+	hiddenDir := filepath.Join(parentTmpDir, ".hidden", "mail")
+	if err := os.MkdirAll(hiddenDir, 0755); err != nil {
+		t.Fatalf("MkdirAll failed: %v", err)
+	}
+
+	validFile := filepath.Join(hiddenDir, "email.msg")
+	if err := os.WriteFile(validFile, []byte("valid"), 0644); err != nil {
+		t.Fatalf("WriteFile failed: %v", err)
+	}
+
+	sources, err := findMsgFiles(hiddenDir)
+	if err != nil {
+		t.Fatalf("findMsgFiles error: %v", err)
+	}
+
+	if len(sources) != 1 {
+		t.Fatalf("expected 1 source, got %d", len(sources))
+	}
+
+	if filepath.Base(sources[0].Path) != "email.msg" {
+		t.Errorf("expected email.msg, got %q", sources[0].Path)
+	}
+}
+
 func TestFindMsgFiles_Zip(t *testing.T) {
 	realMsgContent, err := os.ReadFile(filepath.Join("data", "Medford Tags 01_02_26.msg"))
 	if err != nil {
@@ -82,8 +179,11 @@ func TestFindMsgFiles_Zip(t *testing.T) {
 	}
 
 	zipPath := createTestZip(t, map[string][]byte{
-		"nested/email1.msg": realMsgContent,
-		"readme.txt":        []byte("hello world"),
+		"nested/email1.msg":            realMsgContent,
+		"readme.txt":                   []byte("hello world"),
+		"__MACOSX/nested/._email1.msg": realMsgContent,
+		"nested/._email1.msg":          realMsgContent,
+		".DS_Store":                    []byte("some ds store"),
 	})
 	defer os.Remove(zipPath)
 
@@ -140,5 +240,31 @@ func TestNewBorderLayoutObjectsOrder(t *testing.T) {
 	}
 	if _, ok := border.Objects[1].(*widget.Icon); !ok {
 		t.Errorf("expected border.Objects[1] to be *widget.Icon, got %T", border.Objects[1])
+	}
+}
+
+func TestShouldIgnore(t *testing.T) {
+	tests := []struct {
+		path     string
+		expected bool
+	}{
+		{"data/Medford Tags 01_02_26.msg", false},
+		{"Medford.msg", false},
+		{"./Medford.msg", false},
+		{"../Medford.msg", false},
+		{"__MACOSX/data/._Medford.msg", true},
+		{"data/._Medford.msg", true},
+		{".DS_Store", true},
+		{"data/.git/config", true},
+		{"data/__macosx/email.msg", true},
+		{"C:\\Users\\User\\__MACOSX\\file.msg", true},
+		{"C:\\Users\\User\\.config\\file.msg", true},
+	}
+
+	for _, test := range tests {
+		got := shouldIgnore(test.path)
+		if got != test.expected {
+			t.Errorf("shouldIgnore(%q) = %v; want %v", test.path, got, test.expected)
+		}
 	}
 }

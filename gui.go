@@ -71,6 +71,23 @@ func loadMessageFromZip(src msgSource) (messageMetadata, error) {
 	return loadMessage(tempPath)
 }
 
+func shouldIgnore(path string) bool {
+	normalized := strings.ReplaceAll(path, "\\", "/")
+	parts := strings.Split(normalized, "/")
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			continue
+		}
+		if strings.EqualFold(part, "__MACOSX") {
+			return true
+		}
+		if strings.HasPrefix(part, ".") {
+			return true
+		}
+	}
+	return false
+}
+
 func findMsgFiles(path string) ([]msgSource, error) {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -97,6 +114,9 @@ func findMsgFiles(path string) ([]msgSource, error) {
 				if f.FileInfo().IsDir() {
 					continue
 				}
+				if shouldIgnore(f.Name) {
+					continue
+				}
 				if strings.EqualFold(filepath.Ext(f.Name), ".msg") {
 					sources = append(sources, msgSource{
 						Path:        f.Name,
@@ -114,11 +134,17 @@ func findMsgFiles(path string) ([]msgSource, error) {
 			if err != nil {
 				return err
 			}
-			if !d.IsDir() && strings.EqualFold(filepath.Ext(p), ".msg") {
-				rel, err := filepath.Rel(path, p)
-				if err != nil {
-					rel = filepath.Base(p)
+			rel, err := filepath.Rel(path, p)
+			if err != nil {
+				rel = filepath.Base(p)
+			}
+			if shouldIgnore(rel) {
+				if d.IsDir() {
+					return filepath.SkipDir
 				}
+				return nil
+			}
+			if !d.IsDir() && strings.EqualFold(filepath.Ext(p), ".msg") {
 				sources = append(sources, msgSource{
 					Path:        p,
 					DisplayName: rel,
