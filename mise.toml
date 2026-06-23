@@ -1,0 +1,14 @@
+[tools]
+go = "latest"
+
+[tasks.build]
+description = "Build and package binaries for macOS and Windows"
+depends = ["build-darwin", "build-windows"]
+
+[tasks.build-darwin]
+description = "Build and package macOS binaries (separate arm64 and amd64 bundles)"
+run = "fyne-cross darwin -arch arm64,amd64"
+
+[tasks.build-windows]
+description = "Build and package Windows binary (amd64)"
+run = "fyne-cross windows -arch amd64"
