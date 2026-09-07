@@ -103,10 +103,10 @@ while true; do
     PROMPT="Look at the migration doc ($DOC_FILE). Identify the next section that needs to be implemented. Work thru the tasks one at a time, checking them off in the document as you go. If the task cannot be completed, or requires user input, write the issue directly in the document then exit."
 
     # Execute omp in non-interactive print mode with a fresh session
-    echo -e "\033[0;32m[loop.sh] Running: omp -p @$DOC_FILE \"$PROMPT\" ${EXTRA_ARGS[*]}\033[0m\n"
+    echo -e "\033[0;32m[loop.sh] Running: omp -p @$DOC_FILE \"$PROMPT\" ${EXTRA_ARGS[*]:-}\033[0m\n"
 
     # Run omp
-    omp -p "@$DOC_FILE" "$PROMPT" "${EXTRA_ARGS[@]}"
+    omp -p "@$DOC_FILE" "$PROMPT" ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}
     EXIT_CODE=$?
 
     # Check exit status
