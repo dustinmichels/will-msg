@@ -25,6 +25,7 @@ type RuleManagerView struct {
 	window        fyne.Window
 	app           fyne.App
 	workingConfig RuleConfig
+	configPath    string
 	selectedIndex int
 
 	table          *widget.Table
@@ -82,11 +83,26 @@ func ShowRuleEditorWindow(a fyne.App, parent fyne.Window, onApplied func()) fyne
 
 // NewRuleManagerView creates and initializes a RuleManagerView with active configuration.
 func NewRuleManagerView(a fyne.App, w fyne.Window, onApplied func()) *RuleManagerView {
-	cfg := LoadConfig().Clone()
+	return NewRuleManagerViewWithPath(a, w, "", onApplied)
+}
+
+// NewRuleManagerViewWithPath creates a RuleManagerView with a specific configuration file path.
+func NewRuleManagerViewWithPath(a fyne.App, w fyne.Window, configPath string, onApplied func()) *RuleManagerView {
+	var cfg RuleConfig
+	if configPath != "" {
+		loaded, err := LoadConfigFromPath(configPath)
+		if err != nil {
+			loaded = DefaultRuleConfig()
+		}
+		cfg = loaded.Clone()
+	} else {
+		cfg = LoadConfig().Clone()
+	}
 	view := &RuleManagerView{
 		window:        w,
 		app:           a,
 		workingConfig: cfg,
+		configPath:    configPath,
 		selectedIndex: -1,
 		onApplied:     onApplied,
 	}
@@ -796,10 +812,15 @@ func (v *RuleManagerView) ApplyChanges() error {
 		return fmt.Errorf("configuration validation failed: %w", err)
 	}
 
-	if err := SaveConfig(v.workingConfig); err != nil {
-		return fmt.Errorf("failed to save rules to disk: %w", err)
+	if v.configPath != "" {
+		if err := SaveConfigToPath(v.configPath, v.workingConfig); err != nil {
+			return fmt.Errorf("failed to save rules to disk: %w", err)
+		}
+	} else {
+		if err := SaveConfig(v.workingConfig); err != nil {
+			return fmt.Errorf("failed to save rules to disk: %w", err)
+		}
 	}
-
 	SetDefaultEngine(NewRuleEngine(v.workingConfig))
 
 	if v.onApplied != nil {

@@ -171,11 +171,15 @@ func TestRuleManagerView_LiveSandboxExecution(t *testing.T) {
 }
 
 func TestRuleManager_CustomRuleAndPrecedenceIntegration(t *testing.T) {
-	// Isolate user config directory for this test
+	// Isolate user config directory and engine for this test
+	origEngine := DefaultEngine()
+	defer SetDefaultEngine(origEngine)
+
 	tempDir := t.TempDir()
 	t.Setenv("HOME", tempDir)
 	t.Setenv("XDG_CONFIG_HOME", tempDir)
 	t.Setenv("APPDATA", tempDir)
+	configPath := filepath.Join(tempDir, "isolated_rules.json")
 
 	a := test.NewApp()
 	w := test.NewWindow(widget.NewLabel("Test"))
@@ -195,8 +199,8 @@ func TestRuleManager_CustomRuleAndPrecedenceIntegration(t *testing.T) {
 		t.Errorf("expected initial label 'special_item_not_out', got %q", initialRecords[0].Label)
 	}
 
-	// Step 1: Add a new custom rule with custom label
-	view := NewRuleManagerView(a, w, nil)
+	// Step 1: Add a new custom rule with custom label using isolated config path
+	view := NewRuleManagerViewWithPath(a, w, configPath, nil)
 	view.BuildUI()
 
 	newLabel := LabelDefinition{
