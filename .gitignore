@@ -1,4 +1,6 @@
 .codegraph
+looptui/looptui
+looptui
 
 fyne-cross/
 bin/

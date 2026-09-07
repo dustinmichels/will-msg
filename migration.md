@@ -48,43 +48,43 @@ location, issue, label, issue_time` (`engine.CSVHeaders`, `Record.ToRow`).
 - [x] Scaffold `wails-version/will-msg/` with the official `vue-ts` template. Preserve the existing
       `data/`, `data-new/`, `truck.png`, and `mise.toml`; keep scaffold platform files under
       `build/`.
-- [ ] Replace npm with bun in `wails.json`:
+- [x] Replace npm with bun in `wails.json`:
       `"frontend:install": "bun install"`, `"frontend:build": "bun run build"`,
       `"frontend:dev:watcher": "bun run dev"`, `"frontend:dev:serverUrl": "auto"`.
       Delete `frontend/package-lock.json`; commit `frontend/bun.lock`.
-- [ ] Set `wails.json.info`: `productName: "will-msg"`, `companyName: "Dustin Michels"`,
+- [x] Set `wails.json.info`: `productName: "will-msg"`, `companyName: "Dustin Michels"`,
       `copyright: "Copyright © 2026 Dustin Michels"`, and `productVersion: "1.0.0"`. Wails has no
       bundle-ID/build-number fields there: set `CFBundleIdentifier =
-    io.github.dustinmichels.willmsg` and `CFBundleVersion = 35` in both
+  io.github.dustinmichels.willmsg` and `CFBundleVersion = 35` in both
       `build/darwin/Info.plist` and `Info.dev.plist`; keep `CFBundleShortVersionString` driven by
       `productVersion`. A version bump is a separate release decision.
 - [x] Keep the scaffolded module directive as `module will-msg`; do **not** run `go mod init`.
       The name must stay stable so copied `will-msg/internal/...` imports compile.
 - [ ] Verify the empty shell: `wails dev` opens a window and `wails build` produces
-      `build/bin/will-msg.app`.
+      `build/bin/will-msg.app`. - **Issue / Needs User Confirmation:** `wails build` was verified (`build/bin/will-msg.app` produced and Info.plist metadata verified) and `wails dev` compiles and starts the Vite dev server, but visual confirmation that a native GUI window renders on the desktop display requires manual user verification.
 
 ---
 
 ## 2. Port the Go core (behavior frozen except bridge serialization)
 
-- [ ] Copy verbatim: `internal/config/`, `internal/engine/`, `internal/parser/`, `internal/scanner/`,
+- [x] Copy verbatim: `internal/config/`, `internal/engine/`, `internal/parser/`, `internal/scanner/`,
       `internal/stats/` (+ their `_test.go` files).
-- [ ] Copy `testdata/` (6 `.msg` fixtures + `msg_parsed.csv`).
-- [ ] Copy CLI commands `cmd/will-msg/` (flags `-input`, `-output`; exit 2 on missing flag) and
+- [x] Copy `testdata/` (6 `.msg` fixtures + `msg_parsed.csv`).
+- [x] Copy CLI commands `cmd/will-msg/` (flags `-input`, `-output`; exit 2 on missing flag) and
       `cmd/msgcat/` (flag `-headers`, 1 positional arg, exit 2 on misuse). **Do not** copy `cmd/will-msg-gui/`.
-- [ ] `go.mod`: require `github.com/wailsapp/wails/v2` + `github.com/willthrom/outlook-msg-parser`.
+- [x] `go.mod`: require `github.com/wailsapp/wails/v2` + `github.com/willthrom/outlook-msg-parser`.
       Must **not** contain `fyne.io/fyne/v2`, `fyne.io/systray`, `github.com/ncruces/zenity`,
       `github.com/go-gl/*`, `github.com/fyne-io/*`.
-- [ ] Keep `go 1.25.0` in `go.mod` (the Wails v2.15 minimum) and Go `1.27.1` in `mise.toml`
+- [x] Keep `go 1.25.0` in `go.mod` (the Wails v2.15 minimum) and Go `1.27.1` in `mise.toml`
       (the reproducible build toolchain). These fields have different purposes and need not match.
-- [ ] `go mod tidy && go build ./... && go test ./internal/...` — all pre-existing engine/parser/
+- [x] `go mod tidy && go build ./... && go test ./internal/...` — all pre-existing engine/parser/
       scanner/stats/config tests green before service work begins.
-- [ ] **Add JSON tags** so bindings emit stable snake_case instead of Go field names.
+- [x] **Add JSON tags** so bindings emit stable snake_case instead of Go field names.
       `engine.Record` has **no** struct tags today — TS bindings would be `SourceFile`, `Subject`, …
       Tag them to match `CSVHeaders` (`json:"source_file"` …, `RowInMessage → row_in_message`).
       Same for `scanner.MessageSource` (`path`, `in_zip`, `zip_path`, `display_name`).
       `config.*` already has tags — leave them exactly as-is (`rules.json` compatibility).
-- [ ] Add serialization-contract tests: marshalled `Record` keys equal `engine.CSVHeaders` as a
+- [x] Add serialization-contract tests: marshalled `Record` keys equal `engine.CSVHeaders` as a
       set, and `MessageSource` keys are exactly `path,in_zip,zip_path,display_name`.
 
 ---
@@ -441,6 +441,7 @@ macOS cross-compile the only evidence for a Windows release.
       macOS and Windows builds/smokes.
 
 ---
+
 ## 13. Post-migration
 
 Out of scope until Phase 12 is green: stats UI, table/file-list affordances, parse progress and
