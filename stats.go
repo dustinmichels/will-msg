@@ -34,8 +34,16 @@ func getRecordDay(rec record) string {
 	return "Unknown"
 }
 
-// ComputeStats aggregates record data into DailyStats and computes SummaryStats.
+// ComputeStats aggregates record data into DailyStats and computes SummaryStats using default engine metrics.
 func ComputeStats(records []record) SummaryStats {
+	return ComputeStatsWithEngine(records, DefaultEngine())
+}
+
+// ComputeStatsWithEngine aggregates record data into DailyStats and computes SummaryStats using specified engine metrics.
+func ComputeStatsWithEngine(records []record, engine *RuleEngine) SummaryStats {
+	if engine == nil {
+		engine = DefaultEngine()
+	}
 	dailyCounts := make(map[string]*DailyStats)
 
 	for _, rec := range records {
@@ -45,17 +53,18 @@ func ComputeStats(records []record) SummaryStats {
 		}
 
 		stats := dailyCounts[day]
-		switch rec.Label {
-		case "msw_not_out":
+		metric := engine.MetricForLabel(rec.Label)
+
+		switch metric {
+		case MetricTrash:
 			stats.TrashNotOut++
-		case "recyc_not_out":
+		case MetricRecycling:
 			stats.RecyclingNotOut++
-		case "msw_and_recyc_not_out":
+		case MetricBoth:
 			stats.TrashNotOut++
 			stats.RecyclingNotOut++
 		}
 	}
-
 	var dailyList []DailyStats
 	for _, ds := range dailyCounts {
 		dailyList = append(dailyList, *ds)

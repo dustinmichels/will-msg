@@ -13,9 +13,28 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 
 	msgparser "github.com/willthrom/outlook-msg-parser"
+	"github.com/willthrom/outlook-msg-parser/models"
 )
+
+var parseLogMu sync.Mutex
+
+func safeParseMsgFile(path string) (*models.Message, error) {
+	parseLogMu.Lock()
+	defer parseLogMu.Unlock()
+
+	prevWriter := log.Writer()
+	prevFlags := log.Flags()
+	log.SetOutput(io.Discard)
+	defer func() {
+		log.SetOutput(prevWriter)
+		log.SetFlags(prevFlags)
+	}()
+
+	return msgparser.ParseMsgFile(path)
+}
 
 func main() {
 	showHeaders := flag.Bool("headers", true, "print From/To/Subject/Date header block before body")
@@ -44,15 +63,10 @@ func main() {
 }
 
 func parse(path string) (body, headers string, err error) {
-	// suppress noisy internal logging from the parser
-	logWriter := log.Writer()
-	log.SetOutput(io.Discard)
-	msg, err := msgparser.ParseMsgFile(path)
-	log.SetOutput(logWriter)
+	msg, err := safeParseMsgFile(path)
 	if err != nil {
 		return "", "", err
 	}
-
 	body = strings.TrimSpace(msg.BodyPlainText)
 	if body == "" {
 		body = strings.TrimSpace(msg.ConvertedBodyHTML)

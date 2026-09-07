@@ -74,3 +74,39 @@ func TestComputeStats(t *testing.T) {
 		t.Errorf("ComputeStats() =\n%+v\nexpected:\n%+v", result, expected)
 	}
 }
+func TestComputeStatsWithEngineCustomMetrics(t *testing.T) {
+	cfg := RuleConfig{
+		Version:          1,
+		EnableHeuristics: true,
+		DefaultLabel:     "other",
+		Labels: []LabelDefinition{
+			{Key: "custom_yard_waste", DisplayName: "Yard Waste", Metric: MetricTrash},
+			{Key: "custom_dual_stream", DisplayName: "Dual Stream", Metric: MetricBoth},
+		},
+		Rules: []ClassificationRule{},
+	}
+	engine := NewRuleEngine(cfg)
+
+	records := []record{
+		{
+			MessageDate: "2026-01-01T12:00:00Z",
+			Label:       "custom_yard_waste",
+		},
+		{
+			MessageDate: "2026-01-01T13:00:00Z",
+			Label:       "custom_dual_stream",
+		},
+	}
+
+	result := ComputeStatsWithEngine(records, engine)
+
+	if len(result.Daily) != 1 {
+		t.Fatalf("expected 1 daily stat, got %d", len(result.Daily))
+	}
+	if result.Daily[0].TrashNotOut != 2 {
+		t.Errorf("expected TrashNotOut 2, got %d", result.Daily[0].TrashNotOut)
+	}
+	if result.Daily[0].RecyclingNotOut != 1 {
+		t.Errorf("expected RecyclingNotOut 1, got %d", result.Daily[0].RecyclingNotOut)
+	}
+}

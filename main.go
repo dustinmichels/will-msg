@@ -12,9 +12,12 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	msgparser "github.com/willthrom/outlook-msg-parser"
+	"github.com/willthrom/outlook-msg-parser/models"
 )
 
 var (
@@ -30,52 +33,36 @@ var (
 	statusStartRE     = regexp.MustCompile(`^(?i)\s*(?:IS|WAS|HAS|ARE|BE|TOO|WILL)\b`)
 	precedingRejectRE = regexp.MustCompile(`(?i)\b(?:WHOLE|OF|ON|IN|THE|BOTH|EACH|EVERY|THIS|THAT|TO|FOR|BY)\s*$`)
 	directionalRE     = regexp.MustCompile(`^(?i)\s+(?:WEST|W|EAST|E|NORTH|N|SOUTH|S)\b`)
-	blockedStatusRE   = regexp.MustCompile(`\bBLOCK(?:ED|ING|S)?\b`)
-	overflowStatusRE  = regexp.MustCompile(`\b(?:OVERFLOW(?:ING|ED|S)|OVERLOAD(?:ED|ING|S)?)\b`)
 	signatureLineRE   = regexp.MustCompile(`^(?:regards|best|sincerely|thank you|thanks)[,!.\s]*$`)
 	wideGapRE         = regexp.MustCompile(`\s{3,}`)
 )
 
-type issuePattern struct {
-	Label   string
-	Pattern string
+var defaultEngine atomic.Pointer[RuleEngine]
+
+func init() {
+	defaultEngine.Store(NewRuleEngine(DefaultRuleConfig()))
 }
 
-var issuePatterns = []issuePattern{
-	{Label: "msw_and_recyc_not_out", Pattern: "MSW AND RECYC NOT OUT"},
-	{Label: "msw_and_recyc_not_out", Pattern: "MSW AND RCY NOT OUT"},
-	{Label: "msw_and_recyc_not_out", Pattern: "RECYC AND MSW NOT OUT"},
-	{Label: "msw_and_recyc_not_out", Pattern: "RCY AND MSW NOT OUT"},
-	{Label: "msw_and_recyc_not_out", Pattern: "TRASH AND RECYCLING NOT OUT"},
-	{Label: "msw_and_recyc_not_out", Pattern: "TRASH AND RECYC NOT OUT"},
-	{Label: "msw_and_recyc_not_out", Pattern: "TRASH AND RCY NOT OUT"},
-	{Label: "msw_and_recyc_not_out", Pattern: "TRASH/RECYC NOT OUT"},
-	{Label: "msw_and_recyc_not_out", Pattern: "TRASH/RCY NOT OUT"},
-	{Label: "msw_and_recyc_not_out", Pattern: "TRASH / RECYC NOT OUT"},
-	{Label: "msw_and_recyc_not_out", Pattern: "TRASH / RCY NOT OUT"},
-	{Label: "recyc_not_out", Pattern: "RECYC NOT OUT"},
-	{Label: "recyc_not_out", Pattern: "RCY NOT OUT"},
-	{Label: "recyc_not_out", Pattern: "RECYCLE NOT OUT"},
-	{Label: "recyc_not_out", Pattern: "RECYCLING NOT OUT"},
-	{Label: "recyc_not_out", Pattern: "RECYCCLE NOT OUT"},
-	{Label: "recyc_not_out", Pattern: "NOT OUT RECYC"},
-	{Label: "recyc_not_out", Pattern: "NOT OUT RCY"},
-	{Label: "msw_not_out", Pattern: "MSW NOT OUT"},
-	{Label: "msw_not_out", Pattern: "TRASH NOT OUT"},
-	{Label: "special_item_not_out", Pattern: "BULK ITEM NOT OUT"},
-	{Label: "special_item_not_out", Pattern: "BEDFRAME AND SOFA NOT OUT"},
-	{Label: "special_item_not_out", Pattern: "FRIDGE NOT OUT"},
-	{Label: "special_item_not_out", Pattern: "SOFA NOT OUT"},
-	{Label: "recyc_contaminated", Pattern: "RECY CONTAM"},
-	{Label: "recyc_contaminated", Pattern: "RECYC CONTAM"},
-	{Label: "recyc_contaminated", Pattern: "RCY CONTAM"},
-	{Label: "recyc_contaminated", Pattern: "RECYCLE CONTAM"},
-	{Label: "recyc_contaminated", Pattern: "RECYCLING CONTAM"},
-	{Label: "recyc_contaminated", Pattern: "CONTAMINATED RECYC"},
-	{Label: "recyc_contaminated", Pattern: "CONTAMINATED RCY"},
-	{Label: "recyc_contaminated", Pattern: "CONTAMINATED RECYCLE"},
-	{Label: "recyc_contaminated", Pattern: "CONTAMINATED RECYCLING"},
-	{Label: "recyc_contaminated", Pattern: "RECYCLING CONTAMINATED"},
+// DefaultEngine returns the active snapshot of the default rule engine.
+func DefaultEngine() *RuleEngine {
+	eng := defaultEngine.Load()
+	if eng == nil {
+		return NewRuleEngine(DefaultRuleConfig())
+	}
+	return eng
+}
+
+// SetDefaultEngine updates the active default rule engine atomically.
+func SetDefaultEngine(engine *RuleEngine) {
+	if engine == nil {
+		engine = NewRuleEngine(DefaultRuleConfig())
+	}
+	defaultEngine.Store(engine)
+}
+
+// ReloadDefaultEngine reloads configuration from disk and updates the default rule engine atomically.
+func ReloadDefaultEngine() {
+	SetDefaultEngine(NewRuleEngine(LoadConfig()))
 }
 
 type record struct {
@@ -136,7 +123,7 @@ type parseSummary struct {
 
 func main() {
 	log.SetFlags(0)
-
+	ReloadDefaultEngine()
 	input := flag.String("input", "", "Path to a .msg file or a directory of .msg files")
 	output := flag.String("output", "", "Path to the CSV file to write")
 	flag.Parse()
@@ -171,15 +158,28 @@ func main() {
 	log.Printf("parsed %d files into %d rows; skipped %d files", summary.ParsedFiles, len(records), summary.SkippedFiles)
 }
 
-func loadMessage(path string) (messageMetadata, error) {
-	logWriter := log.Writer()
+var parseLogMu sync.Mutex
+
+func safeParseMsgFile(path string) (*models.Message, error) {
+	parseLogMu.Lock()
+	defer parseLogMu.Unlock()
+
+	prevWriter := log.Writer()
+	prevFlags := log.Flags()
 	log.SetOutput(io.Discard)
-	msg, err := msgparser.ParseMsgFile(path)
-	log.SetOutput(logWriter)
+	defer func() {
+		log.SetOutput(prevWriter)
+		log.SetFlags(prevFlags)
+	}()
+
+	return msgparser.ParseMsgFile(path)
+}
+
+func loadMessage(path string) (messageMetadata, error) {
+	msg, err := safeParseMsgFile(path)
 	if err != nil {
 		return messageMetadata{}, err
 	}
-
 	body := strings.TrimSpace(msg.BodyPlainText)
 	if body == "" {
 		body = strings.TrimSpace(msg.ConvertedBodyHTML)
@@ -236,55 +236,14 @@ func expandEntries(line string) []string {
 }
 
 func parseRecords(meta messageMetadata) []record {
-	lines := cleanLines(meta.Body)
-	records := make([]record, 0)
-	var currentTime time.Time
-	var currentDispatcher string
-	rowInMessage := 0
+	return parseRecordsWithEngine(meta, DefaultEngine())
+}
 
-	for _, line := range lines {
-		if matches := timestampLineRE.FindStringSubmatch(line); matches != nil {
-			parsedTime, err := time.ParseInLocation("01/02/2006 15:04:05", matches[1], time.Local)
-			if err == nil {
-				currentTime = parsedTime
-			}
-			currentDispatcher = matches[2]
-			continue
-		}
-		if isFooterLine(line) {
-			if currentTime.IsZero() {
-				continue
-			}
-			break
-		}
-		if isIntroLine(line) {
-			continue
-		}
-
-		if currentTime.IsZero() {
-			continue
-		}
-
-		rowInMessage++
-		for _, entry := range expandEntries(line) {
-			locationHint, parsedIssue, label, issueTime := classifyEntry(entry)
-			records = append(records, record{
-				SourceFile:   meta.SourceFile,
-				Subject:      meta.Subject,
-				MessageDate:  formatTime(meta.MessageDate),
-				ReportedAt:   currentTime.Format(time.RFC3339),
-				Dispatcher:   currentDispatcher,
-				RowInMessage: rowInMessage,
-				RawEntry:     entry,
-				LocationHint: locationHint,
-				ParsedIssue:  parsedIssue,
-				Label:        label,
-				IssueTime:    issueTime,
-			})
-		}
+func parseRecordsWithEngine(meta messageMetadata, engine *RuleEngine) []record {
+	if engine == nil {
+		engine = DefaultEngine()
 	}
-
-	return records
+	return engine.ParseRecords(meta)
 }
 
 func collectInputPaths(input string) ([]string, error) {
@@ -322,6 +281,13 @@ func collectInputPaths(input string) ([]string, error) {
 }
 
 func parseInputPaths(paths []string) ([]record, parseSummary, error) {
+	return parseInputPathsWithEngine(paths, DefaultEngine())
+}
+
+func parseInputPathsWithEngine(paths []string, engine *RuleEngine) ([]record, parseSummary, error) {
+	if engine == nil {
+		engine = DefaultEngine()
+	}
 	allRecords := make([]record, 0)
 	summary := parseSummary{}
 	isBatch := len(paths) > 1
@@ -336,7 +302,7 @@ func parseInputPaths(paths []string) ([]record, parseSummary, error) {
 			return nil, parseSummary{}, fmt.Errorf("%s: %w", path, err)
 		}
 
-		records := parseRecords(metadata)
+		records := engine.ParseRecords(metadata)
 		if len(records) == 0 {
 			if isBatch {
 				summary.SkippedFiles++
@@ -659,119 +625,18 @@ func findLastAddressIndex(cleaned string) int {
 }
 
 func splitAddressAndStatus(raw string) (address string, status string) {
-	cleaned := strings.TrimSpace(raw)
-	cleaned = strings.ReplaceAll(cleaned, "–", "-")
-	cleaned = strings.ReplaceAll(cleaned, "—", "-")
-
-	// 1. Split based on the LAST address suffix.
-	endIdx := findLastAddressIndex(cleaned)
-	if endIdx != -1 {
-		address = strings.TrimSpace(cleaned[:endIdx])
-		status = strings.TrimSpace(cleaned[endIdx:])
-	} else {
-		// 2. If no suffix matches, check if we contain any known issue pattern.
-		// E.g., for suffix-less addresses like "23 AND 25 KILSYTH MSW AND RECYC NOT OUT"
-		upper := strings.ToUpper(cleaned)
-		earliestIdx := -1
-		for _, candidate := range issuePatterns {
-			idx := strings.Index(upper, candidate.Pattern)
-			if idx != -1 {
-				if earliestIdx == -1 || idx < earliestIdx {
-					earliestIdx = idx
-				}
-			}
-		}
-
-		if earliestIdx != -1 {
-			address = strings.TrimSpace(cleaned[:earliestIdx])
-			status = strings.TrimSpace(cleaned[earliestIdx:])
-		} else {
-			// 3. Fallback: split by first comma, semicolon, or space-dash-space
-			firstDelim := strings.Index(cleaned, " - ")
-			delimLen := 3
-			if firstDelim == -1 {
-				delimLen = 0
-			}
-			if idx := strings.IndexAny(cleaned, ",;"); idx != -1 && (firstDelim == -1 || idx < firstDelim) {
-				firstDelim = idx
-				delimLen = 1
-			}
-
-			if firstDelim != -1 {
-				address = strings.TrimSpace(cleaned[:firstDelim])
-				status = strings.TrimSpace(cleaned[firstDelim+delimLen:])
-			} else {
-				return cleaned, ""
-			}
-		}
-	}
-
-	address = strings.TrimFunc(address, func(r rune) bool {
-		return r == ',' || r == '-' || r == ';' || r == ' ' || r == '.'
-	})
-	status = strings.TrimFunc(status, func(r rune) bool {
-		return r == ',' || r == '-' || r == ';' || r == ' ' || r == '.'
-	})
-
-	return address, status
+	return DefaultEngine().SplitAddress(raw)
 }
 
 func normalizeIssueLabel(status string) string {
-	s := strings.TrimSpace(status)
-	sUpper := strings.ToUpper(s)
-
-	for _, candidate := range issuePatterns {
-		if strings.Contains(sUpper, candidate.Pattern) {
-			return candidate.Label
-		}
-	}
-	if blockedStatusRE.MatchString(sUpper) {
-		return "blocked"
-	}
-	if overflowStatusRE.MatchString(sUpper) {
-		return "overflowing"
-	}
-
-	s = strings.ReplaceAll(sUpper, "NOT SVCD", "NOT SERVICED")
-	s = strings.ReplaceAll(s, "UNABLE TO SVC", "UNABLE TO SERVICE")
-
-	var sb strings.Builder
-	lastWasUnderscore := false
-	for _, r := range s {
-		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			sb.WriteRune(r)
-			lastWasUnderscore = false
-		} else if !lastWasUnderscore && sb.Len() > 0 {
-			sb.WriteRune('_')
-			lastWasUnderscore = true
-		}
-	}
-
-	label := strings.Trim(strings.ToLower(sb.String()), "_")
-	labelWithoutTrailingDigits := strings.Trim(strings.TrimRight(label, "0123456789"), "_")
-	if strings.HasSuffix(labelWithoutTrailingDigits, "_not_out") {
-		return "special_item_not_out"
-	}
-
-	return "other"
+	return DefaultEngine().NormalizeIssueLabel(status)
 }
 
 func classifyEntry(raw string) (locationHint string, parsedIssue string, label string, issueTime string) {
-	cleaned := strings.TrimSpace(raw)
-	if matches := entryTimeRE.FindStringSubmatch(cleaned); matches != nil {
-		issueTime = matches[1]
-		cleaned = strings.TrimSpace(cleaned[:len(cleaned)-len(matches[0])])
-	}
-
-	address, status := splitAddressAndStatus(cleaned)
-	if status == "" {
-		return address, "", "", issueTime
-	}
-
-	return address, status, normalizeIssueLabel(status), issueTime
+	return DefaultEngine().Classify(raw)
 }
 
-func writeCSV(path string, records []record) error {
+func writeCSV(path string, records []record) (err error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil && filepath.Dir(path) != "." {
 		return err
 	}
@@ -780,11 +645,13 @@ func writeCSV(path string, records []record) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+	}()
 
 	writer := csv.NewWriter(file)
-	defer writer.Flush()
-
 	if err := writer.Write(csvHeaders); err != nil {
 		return err
 	}
@@ -795,6 +662,7 @@ func writeCSV(path string, records []record) error {
 		}
 	}
 
+	writer.Flush()
 	return writer.Error()
 }
 

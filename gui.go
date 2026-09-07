@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"context"
 	"encoding/csv"
 	"errors"
 	"fmt"
@@ -165,6 +166,7 @@ func findMsgFiles(path string) ([]msgSource, error) {
 }
 
 func parseMsgSources(sources []msgSource) ([]record, error) {
+	engine := DefaultEngine()
 	allRecords := make([]record, 0)
 
 	for _, src := range sources {
@@ -184,7 +186,7 @@ func parseMsgSources(sources []msgSource) ([]record, error) {
 
 		meta.SourceFile = filepath.Base(src.Path)
 
-		records := parseRecords(meta)
+		records := parseRecordsWithEngine(meta, engine)
 		allRecords = append(allRecords, records...)
 	}
 
@@ -282,11 +284,17 @@ func revealFile(filePath string, a fyne.App) {
 }
 
 func runGUI() {
+	ReloadDefaultEngine()
 	a := app.New()
 	a.Settings().SetTheme(customTheme{Theme: theme.DefaultTheme()})
 
 	w := a.NewWindow("Outlook MSG to CSV Parser")
 	w.Resize(fyne.NewSize(950, 700))
+
+	ctx, cancelAnimation := context.WithCancel(context.Background())
+	w.SetOnClosed(func() {
+		cancelAnimation()
+	})
 
 	var currentSources []msgSource
 	var displayNames []string
@@ -343,9 +351,13 @@ func runGUI() {
 		defer ticker.Stop()
 
 		var t float64 = 0
-		for range ticker.C {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
 			t += 0.13 // mouth chomping speed
-
 			width := statusBarBg.Size().Width
 			if width <= 0 {
 				continue
@@ -525,8 +537,9 @@ func runGUI() {
 		downloadButton.Disable()
 		saveAsButton.Disable()
 
+		sourcesToParse := append([]msgSource(nil), currentSources...)
 		go func() {
-			records, err := parseMsgSources(currentSources)
+			records, err := parseMsgSources(sourcesToParse)
 			if err != nil {
 				fyne.Do(func() {
 					dialog.ShowError(err, w)
@@ -662,10 +675,16 @@ func runGUI() {
 	headerSubtitle.TextSize = 13
 	headerSubtitle.TextStyle = fyne.TextStyle{Italic: true}
 
+	rulesButton := widget.NewButtonWithIcon("Rules & Labels", theme.SettingsIcon(), func() {
+		ShowRuleEditorWindow(a, w, nil)
+	})
+
 	headerContent := container.NewHBox(
 		truckImg,
 		headerTitle,
 		layout.NewSpacer(),
+		rulesButton,
+		canvas.NewText("  ", color.Transparent),
 		headerSubtitle,
 		canvas.NewText("   ", color.Transparent),
 	)

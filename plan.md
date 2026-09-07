@@ -188,32 +188,32 @@ type RuleConfig struct {
 
 ### Phase 1: Engine Decoupling & Configuration Engine
 
-- [ ] Create `config.go` containing struct definitions, JSON serialization, and default configuration constants.
-- [ ] Create `engine.go` encapsulating `RuleEngine` / `Classifier`:
+- [x] Create `config.go` containing struct definitions, JSON serialization, and default configuration constants.
+- [x] Create `engine.go` encapsulating `RuleEngine` / `Classifier`:
   - Methods: `NewRuleEngine(cfg RuleConfig)`, `Classify(raw string) (location, status, label, issueTime)`, `SplitAddress(raw string) (address, status)`.
-- [ ] Refactor `main.go` functions (`classifyEntry`, `splitAddressAndStatus`, `normalizeIssueLabel`, `parseRecords`) to use the `RuleEngine` instance rather than package-level variables.
-- [ ] Update `stats.go` to use the label-to-metric mappings defined in the engine config.
-- [ ] Ensure all existing unit tests in `main_test.go` and `stats_test.go` pass seamlessly with default configuration.
+- [x] Refactor `main.go` functions (`classifyEntry`, `splitAddressAndStatus`, `normalizeIssueLabel`, `parseRecords`) to use the `RuleEngine` instance rather than package-level variables.
+- [x] Update `stats.go` to use the label-to-metric mappings defined in the engine config.
+- [x] Ensure all existing unit tests in `main_test.go` and `stats_test.go` pass seamlessly with default configuration.
 
 ### Phase 2: Configuration Persistence & File I/O
 
-- [ ] Implement `LoadConfig()` and `SaveConfig(cfg RuleConfig)` with fallback to default rules.
-- [ ] Implement JSON export and import with schema validation (e.g., verifying regex compilation and preventing duplicate IDs).
-- [ ] Add unit tests for config load, save, migration, and invalid JSON recovery.
+- [x] Implement `LoadConfig()` and `SaveConfig(cfg RuleConfig)` with fallback to default rules.
+- [x] Implement JSON export and import with schema validation (e.g., verifying regex compilation and preventing duplicate IDs).
+- [x] Add unit tests for config load, save, migration, and invalid JSON recovery.
 
 ### Phase 3: Fyne GUI Rule Editor
 
-- [ ] Build the Rule Manager UI layout in `gui_rules.go`:
+- [x] Build the Rule Manager UI layout in `gui_rules.go`:
   - List/Table with custom cell renderers.
   - Form inputs for Adding/Editing individual rules.
   - Move Up / Move Down buttons to reorder slice items.
-- [ ] Connect the "Rules & Labels" button in the main GUI header.
-- [ ] Wire up "Save & Apply", refreshing active engine state for subsequent file parsing runs.
+- [x] Connect the "Rules & Labels" button in the main GUI header.
+- [x] Wire up "Save & Apply", refreshing active engine state for subsequent file parsing runs.
 
 ### Phase 4: Interactive Sandbox & Testing Suite
 
-- [ ] Implement the Live Rule Tester widget in the editor footer, running test input through `engine.Classify()` on every keystroke.
-- [ ] Add automated UI and integration tests verifying:
+- [x] Implement the Live Rule Tester widget in the editor footer, running test input through `engine.Classify()` on every keystroke.
+- [x] Add automated UI and integration tests verifying:
   - Adding a custom pattern changes output CSV labels.
   - Reordering rules changes matching precedence.
   - Resetting restores original default behavior.
