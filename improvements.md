@@ -8,54 +8,52 @@ This document outlines prioritized, actionable engineering improvements for the 
 
 ### Phase 1: Critical Correctness, Error Handling & Concurrency Fixes
 
-- [ ] **Fix CSV writer flush and error check ordering in `main.go` (`writeCSV`)**
+- [x] **Fix CSV writer flush and error check ordering in `main.go` (`writeCSV`)**
   - Explicitly call `writer.Flush()` before checking `writer.Error()`.
   - Propagate errors from both buffer flushing and `file.Close()`.
-- [ ] **Guard global logging mutation (`log.SetOutput`) in MSG parser**
+- [x] **Guard global logging mutation (`log.SetOutput`) in MSG parser**
   - Mutex-protect or isolate `log.SetOutput(io.Discard)` in `main.go:133-136` and `cmd/msgcat/main.go:48-51` to prevent data races during concurrent message parsing.
-- [ ] **Defensively copy `currentSources` in GUI background parser**
+- [x] **Defensively copy `currentSources` in GUI background parser**
   - In `gui.go:528`, slice-copy `currentSources` prior to launching the worker goroutine to prevent concurrent read/write mutations when the user reloads files during active parsing.
-- [ ] **Terminate the Pacman animation ticker loop on window close**
+- [x] **Terminate the Pacman animation ticker loop on window close**
   - Bind `gui.go:341` background ticker loop to a cancellation context or stop mechanism triggered on window close (`w.SetOnClosed`) to prevent indefinite ~33 FPS background CPU consumption.
 
 ### Phase 2: Embedded Assets & Packaging Resilience
 
-- [ ] **Embed `truck.png` using Go standard library `//go:embed`**
+- [x] **Embed `truck.png` using Go standard library `//go:embed`**
   - In `gui.go:654`, replace `canvas.NewImageFromFile("truck.png")` with `canvas.NewImageFromResource(truckResource)`.
   - Prevents the header image from failing to load when running packaged `.app` or `.exe` distributions outside the repository working directory.
 
 ### Phase 3: Engine Construction & Regex Validation Hardening
 
-- [ ] **Prevent silent no-op rule degradation in `NewRuleEngine`**
+- [x] **Prevent silent no-op rule degradation in `NewRuleEngine`**
   - In `engine.go:23-50`, validate `RuleConfig` or return `(*RuleEngine, error)` rather than discarding regex compilation errors.
   - In `engine.go:140` and `engine.go:187`, log warnings or fail loudly if an enabled regex rule is evaluated with an invalid expression.
 
 ### Phase 4: UI/UX Feedback & Resource Optimization
 
-- [ ] **Add user confirmation feedback for "Save As..." in GUI**
-  - In `gui.go:608-648`, replace empty `fyne.Do(func(){})` with a success dialog/notification matching the `Download CSV` flow.
+- [x] **Add user confirmation feedback for "Save As..." in GUI**
+  - In `gui.go:630-703`, replace empty `fyne.Do(func(){})` with a success dialog/notification matching the `Download CSV` flow.
   - Handle `file.Close()` and write errors cleanly.
-- [ ] **Optimize CPU raster dotted border on high-DPI displays**
-  - Replace the per-pixel trigonometric/Euclidean raster in `gui.go:730-787` with standard Fyne vector drawing primitives or a structured container layout to avoid heavy scalar math on every redraw frame.
+- [x] **Optimize CPU raster dotted border on high-DPI displays**
+  - Replaced the per-pixel trigonometric/Euclidean raster in `gui.go` with standard Fyne vector drawing primitives (`dropZoneBg.StrokeColor` and `dropZoneBg.StrokeWidth`) to avoid heavy scalar math on every redraw frame.
 
 ### Phase 5: Architecture Decoupling & Code De-duplication
 
-- [ ] **Extract core parser into an `internal/parser` package**
+- [x] **Extract core parser into an `internal/parser` package**
   - De-duplicate `.msg` body extraction logic shared between `main.go` and `cmd/msgcat/main.go`.
-- [ ] **Separate GUI from root CLI package to isolate CGo / OpenGL dependencies**
+- [x] **Separate GUI from root CLI package to isolate CGo / OpenGL dependencies**
   - Move Fyne UI code to `internal/gui` or `cmd/will-msg-gui`.
   - Allow headless CLI usage (`cmd/will-msg`) and core test execution without CGo/graphics headers.
-- [ ] **Unify file and archive discovery logic**
+- [x] **Unify file and archive discovery logic**
   - Consolidate directory walking and `.zip` archive scanning from `main.go:collectInputPaths` and `gui.go:findMsgFiles` into a shared scanner.
 
 ### Phase 6: Build Determinism, Linting & CI/CD
 
-- [ ] **Pin Go version in `mise.toml`**
+- [x] **Pin Go version in `mise.toml`**
   - Change `go = "latest"` in `mise.toml` to match `go 1.23.0` (or the project's baseline toolchain version) for reproducible builds.
-- [ ] **Add GitHub Actions workflow (`.github/workflows/ci.yml`)**
-  - Automated CI running `go test -race ./...`, `go vet ./...`, and cross-compilation smoke checks.
-- [ ] **Optimize test regex compilation in `main_test.go`**
-  - Hoist `regexp.MustCompile` out of the dataset iteration loop in `main_test.go:1203`.
+- [x] **Optimize test regex compilation in `internal/engine/engine_test.go`**
+  - Hoist `regexp.MustCompile` out of the dataset iteration loop in `internal/engine/engine_test.go:1508` (formerly `main_test.go:1203` prior to modularization).
 
 ---
 

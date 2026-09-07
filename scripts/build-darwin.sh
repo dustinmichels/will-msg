@@ -8,7 +8,7 @@ FYNE_CROSS_DIR="$ROOT_DIR/fyne-cross"
 (
 	cd "$ROOT_DIR"
 
-	fyne-cross darwin -arch arm64,amd64
+	fyne-cross darwin -arch arm64,amd64 ./cmd/will-msg-gui
 	mkdir -p "$BIN_DIR"
 	cp "$FYNE_CROSS_DIR/bin/darwin-amd64/will-msg" "$BIN_DIR/will-msg-macos-amd64"
 	cp "$FYNE_CROSS_DIR/bin/darwin-arm64/will-msg" "$BIN_DIR/will-msg-macos-arm64"

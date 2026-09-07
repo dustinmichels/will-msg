@@ -1,6 +1,7 @@
-package main
+package gui
 
 import (
+	"encoding/csv"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,7 +9,30 @@ import (
 
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
+
+	"will-msg/internal/config"
+	"will-msg/internal/engine"
+	"will-msg/internal/parser"
 )
+
+func writeTestCSV(path string, records []engine.Record) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	w := csv.NewWriter(f)
+	if err := w.Write(engine.CSVHeaders); err != nil {
+		return err
+	}
+	for _, rec := range records {
+		if err := w.Write(rec.ToRow()); err != nil {
+			return err
+		}
+	}
+	w.Flush()
+	return w.Error()
+}
 
 func TestRuleManagerView_Initialization(t *testing.T) {
 	a := test.NewApp()
@@ -123,6 +147,7 @@ func TestRuleManagerView_LiveSandboxExecution(t *testing.T) {
 
 	view := NewRuleManagerView(a, w, nil)
 	view.BuildUI()
+
 	// 1. Standard matching
 	view.sandboxInput.SetText("45 FOREST ST TRASH AND RCY NOT OUT 0830AM")
 	view.runSandbox()
@@ -184,13 +209,14 @@ func TestRuleManager_CustomRuleAndPrecedenceIntegration(t *testing.T) {
 	a := test.NewApp()
 	w := test.NewWindow(widget.NewLabel("Test"))
 	defer w.Close()
+
 	// Initial parse with default engine
-	meta := messageMetadata{
+	meta := parser.MessageMetadata{
 		Subject: "Tags 01/02/26",
 		Body:    "09/22/2025 11:29:05 SSAWALLI\n123 MAIN ST CARPET NOT OUT\n45 ELM ST MSW AND RECYC NOT OUT\n",
 	}
 
-	initialRecords := parseRecords(meta)
+	initialRecords := DefaultEngine().ParseRecords(meta)
 	if len(initialRecords) != 2 {
 		t.Fatalf("expected 2 initial records, got %d", len(initialRecords))
 	}
@@ -203,23 +229,23 @@ func TestRuleManager_CustomRuleAndPrecedenceIntegration(t *testing.T) {
 	view := NewRuleManagerViewWithPath(a, w, configPath, nil)
 	view.BuildUI()
 
-	newLabel := LabelDefinition{
+	newLabel := config.LabelDefinition{
 		Key:         "carpet_special",
 		DisplayName: "Carpet Waste",
-		Metric:      MetricTrash,
+		Metric:      config.MetricTrash,
 	}
 	view.workingConfig.Labels = append(view.workingConfig.Labels, newLabel)
 
-	customRule := ClassificationRule{
+	customRule := config.ClassificationRule{
 		ID:          "custom_carpet_1",
 		Pattern:     "CARPET NOT OUT",
-		Type:        RuleTypeSubstring,
+		Type:        config.RuleTypeSubstring,
 		Label:       "carpet_special",
 		Description: "Carpet pickup rule",
 		Enabled:     true,
 	}
 	// Insert at top of rules (precedence 1)
-	view.workingConfig.Rules = append([]ClassificationRule{customRule}, view.workingConfig.Rules...)
+	view.workingConfig.Rules = append([]config.ClassificationRule{customRule}, view.workingConfig.Rules...)
 	view.refreshUI()
 
 	// Step 2: Save & Apply
@@ -228,7 +254,7 @@ func TestRuleManager_CustomRuleAndPrecedenceIntegration(t *testing.T) {
 	}
 
 	// Verify parsed records now reflect the custom rule and label
-	updatedRecords := parseRecords(meta)
+	updatedRecords := DefaultEngine().ParseRecords(meta)
 	if len(updatedRecords) != 2 {
 		t.Fatalf("expected 2 records after save, got %d", len(updatedRecords))
 	}
@@ -238,7 +264,7 @@ func TestRuleManager_CustomRuleAndPrecedenceIntegration(t *testing.T) {
 
 	// Verify writing to CSV contains the updated label
 	csvPath := filepath.Join(tempDir, "test_output.csv")
-	if err := writeCSV(csvPath, updatedRecords); err != nil {
+	if err := writeTestCSV(csvPath, updatedRecords); err != nil {
 		t.Fatalf("failed to write CSV: %v", err)
 	}
 	csvData, err := os.ReadFile(csvPath)
@@ -251,33 +277,33 @@ func TestRuleManager_CustomRuleAndPrecedenceIntegration(t *testing.T) {
 
 	// Step 3: Test Reordering Precedence
 	// Create another rule that matches "CARPET" generally
-	generalCarpetRule := ClassificationRule{
+	generalCarpetRule := config.ClassificationRule{
 		ID:          "general_carpet_1",
 		Pattern:     "CARPET",
-		Type:        RuleTypeSubstring,
+		Type:        config.RuleTypeSubstring,
 		Label:       "other",
 		Description: "General carpet",
 		Enabled:     true,
 	}
 
 	// Place general rule ahead of specific rule
-	view.workingConfig.Rules = append([]ClassificationRule{generalCarpetRule}, view.workingConfig.Rules...)
+	view.workingConfig.Rules = append([]config.ClassificationRule{generalCarpetRule}, view.workingConfig.Rules...)
 	if err := view.ApplyChanges(); err != nil {
 		t.Fatalf("failed to apply changes: %v", err)
 	}
 
-	reorderedRecords := parseRecords(meta)
+	reorderedRecords := DefaultEngine().ParseRecords(meta)
 	if reorderedRecords[0].Label != "other" {
 		t.Errorf("expected general rule to take precedence when placed first, got %q", reorderedRecords[0].Label)
 	}
 
 	// Step 4: Reset to Defaults
-	view.workingConfig = DefaultRuleConfig()
+	view.workingConfig = config.DefaultRuleConfig()
 	if err := view.ApplyChanges(); err != nil {
 		t.Fatalf("failed to apply changes: %v", err)
 	}
 
-	resetRecords := parseRecords(meta)
+	resetRecords := DefaultEngine().ParseRecords(meta)
 	if resetRecords[0].Label != "special_item_not_out" {
 		t.Errorf("expected reset to restore 'special_item_not_out', got %q", resetRecords[0].Label)
 	}
@@ -308,18 +334,18 @@ func TestRuleManager_ExportAndImportRoundTrip(t *testing.T) {
 	tempDir := t.TempDir()
 	exportPath := filepath.Join(tempDir, "exported_rules.json")
 
-	cfg := DefaultRuleConfig()
-	cfg.Rules = append([]ClassificationRule{
+	cfg := config.DefaultRuleConfig()
+	cfg.Rules = append([]config.ClassificationRule{
 		{
 			ID:      "test_rule_999",
 			Pattern: "CUSTOM PATTERN FOR IMPORT",
-			Type:    RuleTypeSubstring,
+			Type:    config.RuleTypeSubstring,
 			Label:   "other",
 			Enabled: true,
 		},
 	}, cfg.Rules...)
 
-	err := ExportConfigFile(exportPath, cfg)
+	err := config.ExportConfigFile(exportPath, cfg)
 	if err != nil {
 		t.Fatalf("failed to export config: %v", err)
 	}
@@ -329,7 +355,7 @@ func TestRuleManager_ExportAndImportRoundTrip(t *testing.T) {
 		t.Fatalf("failed to read exported file: %v", err)
 	}
 
-	imported, err := ParseRuleConfig(data)
+	imported, err := config.ParseRuleConfig(data)
 	if err != nil {
 		t.Fatalf("failed to parse exported file: %v", err)
 	}

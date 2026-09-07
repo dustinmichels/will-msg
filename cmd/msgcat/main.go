@@ -6,50 +6,28 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
-	"io"
-	"log"
 	"os"
 	"strings"
-	"sync"
 
-	msgparser "github.com/willthrom/outlook-msg-parser"
-	"github.com/willthrom/outlook-msg-parser/models"
+	"will-msg/internal/parser"
 )
-
-var parseLogMu sync.Mutex
-
-func safeParseMsgFile(path string) (*models.Message, error) {
-	parseLogMu.Lock()
-	defer parseLogMu.Unlock()
-
-	prevWriter := log.Writer()
-	prevFlags := log.Flags()
-	log.SetOutput(io.Discard)
-	defer func() {
-		log.SetOutput(prevWriter)
-		log.SetFlags(prevFlags)
-	}()
-
-	return msgparser.ParseMsgFile(path)
-}
 
 func main() {
 	showHeaders := flag.Bool("headers", true, "print From/To/Subject/Date header block before body")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: msgcat [-headers=false] <file.msg>\n\nFlags:\n")
+		fmt.Fprintf(os.Stderr, "Usage: %s [-headers=false] <file.msg>\n", os.Args[0])
 		flag.PrintDefaults()
 	}
 	flag.Parse()
 
 	if flag.NArg() != 1 {
 		flag.Usage()
-		os.Exit(1)
+		os.Exit(2)
 	}
 
-	body, headers, err := parse(flag.Arg(0))
+	body, headers, err := parser.ExtractBodyAndHeaders(flag.Arg(0))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "msgcat: %v\n", err)
 		os.Exit(1)
@@ -60,41 +38,4 @@ func main() {
 		fmt.Println(strings.Repeat("-", 72))
 	}
 	fmt.Println(body)
-}
-
-func parse(path string) (body, headers string, err error) {
-	msg, err := safeParseMsgFile(path)
-	if err != nil {
-		return "", "", err
-	}
-	body = strings.TrimSpace(msg.BodyPlainText)
-	if body == "" {
-		body = strings.TrimSpace(msg.ConvertedBodyHTML)
-	}
-	if body == "" {
-		body = strings.TrimSpace(msg.BodyHTML)
-	}
-	if body == "" {
-		return "", "", errors.New("message body is empty")
-	}
-
-	var hb strings.Builder
-	if msg.Subject != "" {
-		fmt.Fprintf(&hb, "Subject: %s\n", strings.TrimSpace(msg.Subject))
-	}
-	from := strings.TrimSpace(msg.FromName)
-	if msg.FromEmail != "" {
-		from += " <" + strings.TrimSpace(msg.FromEmail) + ">"
-	}
-	if from != "" {
-		fmt.Fprintf(&hb, "From:    %s\n", from)
-	}
-	if msg.ToDisplay != "" {
-		fmt.Fprintf(&hb, "To:      %s\n", strings.TrimSpace(msg.ToDisplay))
-	}
-	if !msg.Date.IsZero() {
-		fmt.Fprintf(&hb, "Date:    %s\n", msg.Date.Format("Mon 02 Jan 2006 15:04:05 MST"))
-	}
-
-	return body, strings.TrimRight(hb.String(), "\n"), nil
 }

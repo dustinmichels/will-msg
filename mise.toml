@@ -1,5 +1,5 @@
 [tools]
-go = "latest"
+go = "1.27.1"
 
 [tasks.build]
 description = "Build and package binaries for macOS and Windows"
@@ -12,7 +12,7 @@ run = "./scripts/build-darwin.sh"
 [tasks.build-windows]
 description = "Build and package Windows binary (amd64)"
 run = """
-fyne-cross windows -arch amd64
+fyne-cross windows -arch amd64 ./cmd/will-msg-gui
 mkdir -p bin
 cp fyne-cross/bin/windows-amd64/will-msg.exe bin/will-msg-windows-amd64.exe
 cp fyne-cross/dist/windows-amd64/will-msg.exe.zip bin/will-msg-windows-amd64.zip

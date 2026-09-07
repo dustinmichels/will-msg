@@ -4,11 +4,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"will-msg/internal/parser"
 )
 
-func TestParse(t *testing.T) {
+func TestExtractBodyAndHeaders(t *testing.T) {
 	msgPath := filepath.Join("..", "..", "testdata", "Medford Tags 01_02_26.msg")
-	body, headers, err := parse(msgPath)
+	body, headers, err := parser.ExtractBodyAndHeaders(msgPath)
 	if err != nil {
 		t.Fatalf("parse failed: %v", err)
 	}

@@ -1,8 +1,11 @@
-package main
+package stats
 
 import (
 	"sort"
 	"time"
+
+	"will-msg/internal/config"
+	"will-msg/internal/engine"
 )
 
 // DailyStats represents the calculated metrics for a single day.
@@ -19,8 +22,8 @@ type SummaryStats struct {
 	Daily                  []DailyStats // Sorted by date
 }
 
-// getRecordDay extracts the date string in YYYY-MM-DD format from a record.
-func getRecordDay(rec record) string {
+// GetRecordDay extracts the date string in YYYY-MM-DD format from a record.
+func GetRecordDay(rec engine.Record) string {
 	if rec.MessageDate != "" {
 		if t, err := time.Parse(time.RFC3339, rec.MessageDate); err == nil {
 			return t.Format("2006-01-02")
@@ -35,36 +38,38 @@ func getRecordDay(rec record) string {
 }
 
 // ComputeStats aggregates record data into DailyStats and computes SummaryStats using default engine metrics.
-func ComputeStats(records []record) SummaryStats {
-	return ComputeStatsWithEngine(records, DefaultEngine())
+func ComputeStats(records []engine.Record) SummaryStats {
+	eng := engine.NewRuleEngine(config.DefaultRuleConfig())
+	return ComputeStatsWithEngine(records, eng)
 }
 
 // ComputeStatsWithEngine aggregates record data into DailyStats and computes SummaryStats using specified engine metrics.
-func ComputeStatsWithEngine(records []record, engine *RuleEngine) SummaryStats {
-	if engine == nil {
-		engine = DefaultEngine()
+func ComputeStatsWithEngine(records []engine.Record, eng *engine.RuleEngine) SummaryStats {
+	if eng == nil {
+		eng = engine.NewRuleEngine(config.DefaultRuleConfig())
 	}
 	dailyCounts := make(map[string]*DailyStats)
 
 	for _, rec := range records {
-		day := getRecordDay(rec)
+		day := GetRecordDay(rec)
 		if _, exists := dailyCounts[day]; !exists {
 			dailyCounts[day] = &DailyStats{Date: day}
 		}
 
-		stats := dailyCounts[day]
-		metric := engine.MetricForLabel(rec.Label)
+		stat := dailyCounts[day]
+		metric := eng.MetricForLabel(rec.Label)
 
 		switch metric {
-		case MetricTrash:
-			stats.TrashNotOut++
-		case MetricRecycling:
-			stats.RecyclingNotOut++
-		case MetricBoth:
-			stats.TrashNotOut++
-			stats.RecyclingNotOut++
+		case config.MetricTrash:
+			stat.TrashNotOut++
+		case config.MetricRecycling:
+			stat.RecyclingNotOut++
+		case config.MetricBoth:
+			stat.TrashNotOut++
+			stat.RecyclingNotOut++
 		}
 	}
+
 	var dailyList []DailyStats
 	for _, ds := range dailyCounts {
 		dailyList = append(dailyList, *ds)

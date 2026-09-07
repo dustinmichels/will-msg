@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"encoding/json"
@@ -253,7 +253,7 @@ func (cfg RuleConfig) Validate() error {
 		case RuleTypeSubstring:
 			// valid
 		case RuleTypeRegex:
-			if _, err := compileRegexPattern(rule.Pattern); err != nil {
+			if _, err := CompileRegexPattern(rule.Pattern); err != nil {
 				return fmt.Errorf("rule %q: invalid regex %q: %w", rule.ID, rule.Pattern, err)
 			}
 		default:
@@ -430,7 +430,8 @@ func ImportConfig(r io.Reader) (RuleConfig, error) {
 	return cfg, nil
 }
 
-func compileRegexPattern(pat string) (*regexp.Regexp, error) {
+// CompileRegexPattern compiles a pattern, adding case-insensitive prefix (?i) if missing.
+func CompileRegexPattern(pat string) (*regexp.Regexp, error) {
 	if strings.HasPrefix(pat, "(?i)") || strings.HasPrefix(pat, "(?-i)") {
 		return regexp.Compile(pat)
 	}

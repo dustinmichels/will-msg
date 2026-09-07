@@ -7,5 +7,5 @@ OUTPUT_FILE=${2:-"$ROOT_DIR/output/all_data.csv"}
 
 (
 	cd "$ROOT_DIR" &&
-	go run . -input "$INPUT_DIR" -output "$OUTPUT_FILE"
+	go run ./cmd/will-msg -input "$INPUT_DIR" -output "$OUTPUT_FILE"
 )

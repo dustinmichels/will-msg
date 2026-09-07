@@ -1,13 +1,12 @@
-package main
+package gui
 
 import (
-	"archive/zip"
 	"context"
+	_ "embed"
 	"encoding/csv"
 	"errors"
 	"fmt"
 	"image/color"
-	"io"
 	"log"
 	"math"
 	"net/url"
@@ -15,7 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -29,164 +28,57 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/ncruces/zenity"
+
+	"will-msg/internal/config"
+	"will-msg/internal/engine"
+	"will-msg/internal/scanner"
 )
 
-type msgSource struct {
-	Path        string // path on disk OR path inside zip
-	InZip       bool   // whether it's inside a zip
-	ZipPath     string // path to the zip file itself
-	DisplayName string // name shown in the UI list
+//go:embed truck.png
+var truckPNGBytes []byte
+
+var truckResource = fyne.NewStaticResource("truck.png", truckPNGBytes)
+
+var defaultEngine atomic.Pointer[engine.RuleEngine]
+
+func init() {
+	defaultEngine.Store(engine.NewRuleEngine(config.DefaultRuleConfig()))
 }
 
-func loadMessageFromZip(src msgSource) (messageMetadata, error) {
-	r, err := zip.OpenReader(src.ZipPath)
-	if err != nil {
-		return messageMetadata{}, err
+// DefaultEngine returns the active snapshot of the default rule engine.
+func DefaultEngine() *engine.RuleEngine {
+	eng := defaultEngine.Load()
+	if eng == nil {
+		eng = engine.NewRuleEngine(config.DefaultRuleConfig())
 	}
-	defer r.Close()
-
-	var zipFile *zip.File
-	for _, f := range r.File {
-		if f.Name == src.Path {
-			zipFile = f
-			break
-		}
-	}
-	if zipFile == nil {
-		return messageMetadata{}, fmt.Errorf("file not found in zip: %s", src.Path)
-	}
-
-	rc, err := zipFile.Open()
-	if err != nil {
-		return messageMetadata{}, err
-	}
-	defer rc.Close()
-
-	tempFile, err := os.CreateTemp("", "msg-*.msg")
-	if err != nil {
-		return messageMetadata{}, err
-	}
-	tempPath := tempFile.Name()
-	defer os.Remove(tempPath)
-
-	if _, err := io.Copy(tempFile, rc); err != nil {
-		tempFile.Close()
-		return messageMetadata{}, err
-	}
-	if err := tempFile.Close(); err != nil {
-		return messageMetadata{}, err
-	}
-
-	return loadMessage(tempPath)
+	return eng
 }
 
-func shouldIgnore(path string) bool {
-	normalized := strings.ReplaceAll(path, "\\", "/")
-	for _, part := range strings.Split(normalized, "/") {
-		if part == "" || part == "." || part == ".." {
-			continue
-		}
-		if strings.HasPrefix(part, ".") || strings.EqualFold(part, "__MACOSX") {
-			return true
-		}
+// SetDefaultEngine updates the active default rule engine atomically.
+func SetDefaultEngine(eng *engine.RuleEngine) {
+	if eng == nil {
+		eng = engine.NewRuleEngine(config.DefaultRuleConfig())
 	}
-	return false
+	defaultEngine.Store(eng)
 }
 
-func findMsgFiles(path string) ([]msgSource, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, err
-	}
-
-	var sources []msgSource
-
-	if !info.IsDir() {
-		ext := strings.ToLower(filepath.Ext(path))
-		if ext == ".msg" {
-			sources = append(sources, msgSource{
-				Path:        path,
-				DisplayName: filepath.Base(path),
-			})
-		} else if ext == ".zip" {
-			r, err := zip.OpenReader(path)
-			if err != nil {
-				return nil, fmt.Errorf("open zip: %w", err)
-			}
-			defer r.Close()
-
-			for _, f := range r.File {
-				if f.FileInfo().IsDir() {
-					continue
-				}
-				if shouldIgnore(f.Name) {
-					continue
-				}
-				if strings.EqualFold(filepath.Ext(f.Name), ".msg") {
-					sources = append(sources, msgSource{
-						Path:        f.Name,
-						InZip:       true,
-						ZipPath:     path,
-						DisplayName: f.Name + " (in " + filepath.Base(path) + ")",
-					})
-				}
-			}
-		} else {
-			return nil, fmt.Errorf("unsupported file extension: %s", ext)
-		}
-	} else {
-		err := filepath.WalkDir(path, func(p string, d os.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			rel, err := filepath.Rel(path, p)
-			if err != nil {
-				rel = filepath.Base(p)
-			}
-			if shouldIgnore(rel) {
-				if d.IsDir() {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			if !d.IsDir() && strings.EqualFold(filepath.Ext(p), ".msg") {
-				sources = append(sources, msgSource{
-					Path:        p,
-					DisplayName: rel,
-				})
-			}
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return sources, nil
+// ReloadDefaultEngine reloads configuration from disk and updates the default rule engine atomically.
+func ReloadDefaultEngine() {
+	SetDefaultEngine(engine.NewRuleEngine(config.LoadConfig()))
 }
 
-func parseMsgSources(sources []msgSource) ([]record, error) {
-	engine := DefaultEngine()
-	allRecords := make([]record, 0)
+func parseMsgSources(sources []scanner.MessageSource) ([]engine.Record, error) {
+	eng := DefaultEngine()
+	allRecords := make([]engine.Record, 0)
 
 	for _, src := range sources {
-		var meta messageMetadata
-		var err error
-
-		if src.InZip {
-			meta, err = loadMessageFromZip(src)
-		} else {
-			meta, err = loadMessage(src.Path)
-		}
-
+		meta, err := scanner.LoadSource(src)
 		if err != nil {
 			log.Printf("warning: skipping %s: %v", src.DisplayName, err)
 			continue
 		}
 
-		meta.SourceFile = filepath.Base(src.Path)
-
-		records := parseRecordsWithEngine(meta, engine)
+		records := eng.ParseRecords(meta)
 		allRecords = append(allRecords, records...)
 	}
 
@@ -248,16 +140,13 @@ func revealFile(filePath string, a fyne.App) {
 	case "windows":
 		cmd = exec.Command("explorer.exe", "/select,"+filePath)
 	case "linux":
-		// Try dbus show items first
 		fileURI := "file://" + filePath
 		cmd = exec.Command("dbus-send", "--session", "--dest=org.freedesktop.FileManager1", "/org/freedesktop/FileManager1", "org.freedesktop.FileManager1.ShowItems", "array:string:"+fileURI, "string:\"\"")
 		if err := cmd.Run(); err == nil {
 			return
 		}
-		// Fallback to xdg-open the parent directory
 		cmd = exec.Command("xdg-open", filepath.Dir(filePath))
 	default:
-		// Fallback to generic open folder
 		if dirURI := storage.NewFileURI(filepath.Dir(filePath)); dirURI != nil {
 			if u, err := url.Parse(dirURI.String()); err == nil {
 				_ = a.OpenURL(u)
@@ -269,10 +158,7 @@ func revealFile(filePath string, a fyne.App) {
 	if cmd != nil {
 		err := cmd.Run()
 		if err != nil {
-			// On Windows, explorer.exe /select exits with a non-zero code even on success.
-			// Only fallback if the error is not an ExitError (meaning explorer.exe couldn't launch).
 			if _, ok := err.(*exec.ExitError); !ok || runtime.GOOS != "windows" {
-				// Fallback to generic open folder
 				if dirURI := storage.NewFileURI(filepath.Dir(filePath)); dirURI != nil {
 					if u, err := url.Parse(dirURI.String()); err == nil {
 						_ = a.OpenURL(u)
@@ -283,7 +169,8 @@ func revealFile(filePath string, a fyne.App) {
 	}
 }
 
-func runGUI() {
+// RunGUI launches the interactive Fyne desktop user interface.
+func RunGUI() {
 	ReloadDefaultEngine()
 	a := app.New()
 	a.Settings().SetTheme(customTheme{Theme: theme.DefaultTheme()})
@@ -296,12 +183,12 @@ func runGUI() {
 		cancelAnimation()
 	})
 
-	var currentSources []msgSource
+	var currentSources []scanner.MessageSource
 	var displayNames []string
 	var csvData [][]string
 	var updateSource func(path string)
-	// Status Bar
 
+	// Status Bar
 	statusBarBg := canvas.NewRectangle(color.NRGBA{R: 30, G: 41, B: 59, A: 255}) // Slate-800
 	statusBarBg.SetMinSize(fyne.NewSize(0, 30))
 
@@ -325,7 +212,6 @@ func runGUI() {
 		}
 
 		angle := math.Atan2(dy, dx)
-		// Pacman is going right to left, so the mouth faces left (angle around Pi or -Pi)
 		if math.Abs(angle) > math.Pi-mouthAngle {
 			return color.Transparent
 		}
@@ -475,7 +361,7 @@ func runGUI() {
 		},
 	)
 
-	colWidths := []float32{150, 150, 120, 120, 80, 50, 250, 150, 120, 80}
+	colWidths := []float32{150, 150, 120, 120, 80, 50, 250, 150, 120, 80, 80}
 	for i, colW := range colWidths {
 		previewTable.SetColumnWidth(i, colW)
 	}
@@ -498,7 +384,7 @@ func runGUI() {
 	var showWorkspace func()
 
 	updateSource = func(path string) {
-		sources, err := findMsgFiles(path)
+		sources, err := scanner.FindSources(path)
 		if err != nil {
 			dialog.ShowError(err, w)
 			return
@@ -537,7 +423,7 @@ func runGUI() {
 		downloadButton.Disable()
 		saveAsButton.Disable()
 
-		sourcesToParse := append([]msgSource(nil), currentSources...)
+		sourcesToParse := append([]scanner.MessageSource(nil), currentSources...)
 		go func() {
 			records, err := parseMsgSources(sourcesToParse)
 			if err != nil {
@@ -556,9 +442,9 @@ func runGUI() {
 				return
 			}
 
-			csvRows := [][]string{csvHeaders}
+			csvRows := [][]string{engine.CSVHeaders}
 			for _, rec := range records {
-				csvRows = append(csvRows, rec.toRow())
+				csvRows = append(csvRows, rec.ToRow())
 			}
 
 			fyne.Do(func() {
@@ -582,16 +468,19 @@ func runGUI() {
 			dialog.ShowError(err, w)
 			return
 		}
-		defer file.Close()
 
 		csvWriter := csv.NewWriter(file)
-		err = csvWriter.WriteAll(csvData)
-		if err != nil {
-			dialog.ShowError(err, w)
+		writeErr := csvWriter.WriteAll(csvData)
+		closeErr := file.Close()
+		if writeErr != nil {
+			dialog.ShowError(writeErr, w)
+			return
+		}
+		if closeErr != nil {
+			dialog.ShowError(closeErr, w)
 			return
 		}
 
-		// Show custom dialog with file name, directory, and action buttons to open/reveal
 		title := "CSV Saved Automatically"
 		msgLabel := widget.NewLabel("Your CSV has been automatically saved.")
 
@@ -644,18 +533,50 @@ func runGUI() {
 				})
 				return
 			}
-			defer file.Close()
 
 			csvWriter := csv.NewWriter(file)
-			err = csvWriter.WriteAll(csvData)
-			if err != nil {
+			writeErr := csvWriter.WriteAll(csvData)
+			closeErr := file.Close()
+			if writeErr != nil {
 				fyne.Do(func() {
-					dialog.ShowError(err, w)
+					dialog.ShowError(writeErr, w)
+				})
+				return
+			}
+			if closeErr != nil {
+				fyne.Do(func() {
+					dialog.ShowError(closeErr, w)
 				})
 				return
 			}
 
+			filename := filepath.Base(path)
+			dir := filepath.Dir(path)
+
 			fyne.Do(func() {
+				title := "CSV Saved"
+				msgLabel := widget.NewLabel("Your CSV has been saved.")
+
+				fileInfo := widget.NewForm(
+					widget.NewFormItem("File Name:", widget.NewLabel(filename)),
+					widget.NewFormItem("Saved To:", widget.NewLabel(dir)),
+				)
+
+				showInFolderBtn := widget.NewButtonWithIcon("Show in Folder", theme.FolderOpenIcon(), func() {
+					revealFile(path, a)
+				})
+				showInFolderBtn.Importance = widget.HighImportance
+
+				dialogContent := container.NewVBox(
+					msgLabel,
+					fileInfo,
+					layout.NewSpacer(),
+					container.NewHBox(layout.NewSpacer(), showInFolderBtn, layout.NewSpacer()),
+				)
+
+				d := dialog.NewCustom(title, "OK", dialogContent, w)
+				d.Resize(fyne.NewSize(500, 200))
+				d.Show()
 			})
 		}()
 	}
@@ -663,7 +584,7 @@ func runGUI() {
 	headerBg := canvas.NewRectangle(color.NRGBA{R: 108, G: 185, B: 68, A: 255}) // Truck green
 	headerBg.SetMinSize(fyne.NewSize(0, 50))
 
-	truckImg := canvas.NewImageFromFile("truck.png")
+	truckImg := canvas.NewImageFromResource(truckResource)
 	truckImg.FillMode = canvas.ImageFillContain
 	truckImg.SetMinSize(fyne.NewSize(40, 40))
 
@@ -736,6 +657,8 @@ func runGUI() {
 		layout.NewSpacer(),
 	)
 
+	strokeColor := color.NRGBA{R: 108, G: 185, B: 68, A: 255} // Truck green
+
 	var dropZoneBg *canvas.Rectangle
 	if a.Settings().ThemeVariant() == theme.VariantDark {
 		dropZoneBg = canvas.NewRectangle(color.NRGBA{R: 30, G: 41, B: 59, A: 255})
@@ -743,69 +666,9 @@ func runGUI() {
 		dropZoneBg = canvas.NewRectangle(color.NRGBA{R: 232, G: 247, B: 220, A: 255}) // Light green tint
 	}
 	dropZoneBg.CornerRadius = 16
+	dropZoneBg.StrokeColor = strokeColor
+	dropZoneBg.StrokeWidth = 2
 	dropZoneBg.SetMinSize(fyne.NewSize(650, 400))
-
-	strokeColor := color.NRGBA{R: 108, G: 185, B: 68, A: 255} // Truck green
-	dottedBorder := canvas.NewRasterWithPixels(func(x, y, w, h int) color.Color {
-		scale := float64(w) / 650.0
-		t := int(2.0 * scale)
-		if t < 2 {
-			t = 2
-		}
-		dotSize := int(4.0 * scale)
-		if dotSize < 4 {
-			dotSize = 4
-		}
-		gapSize := int(4.0 * scale)
-		if gapSize < 4 {
-			gapSize = 4
-		}
-		period := dotSize + gapSize
-
-		// Rounded corner radius in physical pixels
-		r := 16.0 * scale
-		fx, fy := float64(x), float64(y)
-		fw, fh := float64(w), float64(h)
-
-		// For each corner, check if the pixel is inside the corner square but
-		// outside the rounded arc — if so, skip it (transparent).
-		inCorner := func(cx, cy float64) bool {
-			dx, dy := fx-cx, fy-cy
-			return dx*dx+dy*dy > r*r
-		}
-		if fx < r && fy < r && inCorner(r, r) {
-			return color.Transparent
-		}
-		if fx >= fw-r && fy < r && inCorner(fw-r, r) {
-			return color.Transparent
-		}
-		if fx < r && fy >= fh-r && inCorner(r, fh-r) {
-			return color.Transparent
-		}
-		if fx >= fw-r && fy >= fh-r && inCorner(fw-r, fh-r) {
-			return color.Transparent
-		}
-
-		// Draw the dotted border only along the edges (within thickness t)
-		onLeft := x < t
-		onRight := x >= w-t
-		onTop := y < t
-		onBottom := y >= h-t
-
-		if onLeft || onRight {
-			if (y % period) < dotSize {
-				return strokeColor
-			}
-		}
-		if onTop || onBottom {
-			if (x % period) < dotSize {
-				return strokeColor
-			}
-		}
-		return color.Transparent
-	})
-	dottedBorder.SetMinSize(fyne.NewSize(650, 400))
-
 	dropZoneContent := container.NewVBox(
 		layout.NewSpacer(),
 		uploadIcon,
@@ -819,7 +682,6 @@ func runGUI() {
 
 	dropZoneStack := container.NewStack(
 		dropZoneBg,
-		dottedBorder,
 		container.NewPadded(dropZoneContent),
 	)
 

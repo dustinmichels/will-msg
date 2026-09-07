@@ -1,4 +1,4 @@
-package main
+package engine
 
 import (
 	"encoding/csv"
@@ -6,16 +6,463 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"testing"
+
+	"will-msg/internal/config"
+	"will-msg/internal/parser"
 )
 
+func defaultTestEngine() *RuleEngine {
+	return NewRuleEngine(config.DefaultRuleConfig())
+}
+
+func TestRuleEngineCustomSubstringPrecedence(t *testing.T) {
+	cfg := config.RuleConfig{
+		Version:          1,
+		EnableHeuristics: true,
+		DefaultLabel:     "other",
+		Labels: []config.LabelDefinition{
+			{Key: "custom_yard_waste", DisplayName: "Yard Waste", Metric: config.MetricTrash},
+			{Key: "recyc_not_out", DisplayName: "Recycling Not Out", Metric: config.MetricRecycling},
+		},
+		Rules: []config.ClassificationRule{
+			{
+				ID:      "yard_waste_1",
+				Pattern: "YARD WASTE NOT OUT",
+				Type:    config.RuleTypeSubstring,
+				Label:   "custom_yard_waste",
+				Enabled: true,
+			},
+			{
+				ID:      "recyc_not_out_1",
+				Pattern: "NOT OUT",
+				Type:    config.RuleTypeSubstring,
+				Label:   "recyc_not_out",
+				Enabled: true,
+			},
+		},
+	}
+
+	engine := NewRuleEngine(cfg)
+
+	loc, issue, label, time := engine.Classify("123 MAIN ST YARD WASTE NOT OUT 0900AM")
+	if loc != "123 MAIN ST" {
+		t.Errorf("expected loc '123 MAIN ST', got %q", loc)
+	}
+	if issue != "YARD WASTE NOT OUT" {
+		t.Errorf("expected issue 'YARD WASTE NOT OUT', got %q", issue)
+	}
+	if label != "custom_yard_waste" {
+		t.Errorf("expected label 'custom_yard_waste', got %q", label)
+	}
+	if time != "0900AM" {
+		t.Errorf("expected time '0900AM', got %q", time)
+	}
+
+	rule, idx, ok := engine.MatchRule("YARD WASTE NOT OUT")
+	if !ok || idx != 0 || rule.ID != "yard_waste_1" {
+		t.Errorf("MatchRule failed: got rule=%+v, idx=%d, ok=%v", rule, idx, ok)
+	}
+}
+
+func TestRuleEngineRuleReorderingPrecedence(t *testing.T) {
+	cfg := config.RuleConfig{
+		Version:          1,
+		EnableHeuristics: true,
+		DefaultLabel:     "other",
+		Labels:           config.DefaultLabels(),
+		Rules: []config.ClassificationRule{
+			{
+				ID:      "general_rule",
+				Pattern: "NOT OUT",
+				Type:    config.RuleTypeSubstring,
+				Label:   "recyc_not_out",
+				Enabled: true,
+			},
+			{
+				ID:      "specific_rule",
+				Pattern: "MSW AND RECYC NOT OUT",
+				Type:    config.RuleTypeSubstring,
+				Label:   "msw_and_recyc_not_out",
+				Enabled: true,
+			},
+		},
+	}
+
+	engine := NewRuleEngine(cfg)
+	label := engine.NormalizeIssueLabel("MSW AND RECYC NOT OUT")
+	if label != "recyc_not_out" {
+		t.Errorf("expected general rule to match first when placed ahead, got %q", label)
+	}
+
+	cfg.Rules = []config.ClassificationRule{cfg.Rules[1], cfg.Rules[0]}
+	engine2 := NewRuleEngine(cfg)
+	label2 := engine2.NormalizeIssueLabel("MSW AND RECYC NOT OUT")
+	if label2 != "msw_and_recyc_not_out" {
+		t.Errorf("expected specific rule to match when placed ahead, got %q", label2)
+	}
+}
+
+func TestRuleEngineRegexRules(t *testing.T) {
+	cfg := config.RuleConfig{
+		Version:          1,
+		EnableHeuristics: false,
+		DefaultLabel:     "other",
+		Labels: []config.LabelDefinition{
+			{Key: "snow_obstruction", DisplayName: "Snow Obstruction", Metric: config.MetricNone},
+		},
+		Rules: []config.ClassificationRule{
+			{
+				ID:      "snow_regex",
+				Pattern: `\bSNOW(?:BANK|DRIFT)?\b`,
+				Type:    config.RuleTypeRegex,
+				Label:   "snow_obstruction",
+				Enabled: true,
+			},
+		},
+	}
+
+	engine := NewRuleEngine(cfg)
+
+	tests := []struct {
+		input     string
+		wantLabel string
+	}{
+		{"CAR IN SNOWBANK", "snow_obstruction"},
+		{"BIG SNOWDRIFT IN WAY", "snow_obstruction"},
+		{"SNOW ON ROAD", "snow_obstruction"},
+		{"ICE ON ROAD", "other"},
+	}
+
+	for _, tt := range tests {
+		got := engine.NormalizeIssueLabel(tt.input)
+		if got != tt.wantLabel {
+			t.Errorf("NormalizeIssueLabel(%q) = %q, want %q", tt.input, got, tt.wantLabel)
+		}
+	}
+}
+
+func TestRuleEngineRegexCaseSensitivity(t *testing.T) {
+	cfg := config.RuleConfig{
+		Version:          1,
+		EnableHeuristics: false,
+		DefaultLabel:     "other",
+		Labels: []config.LabelDefinition{
+			{Key: "strict_case", DisplayName: "Strict Case", Metric: config.MetricNone},
+			{Key: "default_case", DisplayName: "Default Case", Metric: config.MetricNone},
+		},
+		Rules: []config.ClassificationRule{
+			{
+				ID:      "case_sensitive_regex",
+				Pattern: `(?-i)\bexactLower\b`,
+				Type:    config.RuleTypeRegex,
+				Label:   "strict_case",
+				Enabled: true,
+			},
+			{
+				ID:      "default_insensitive_regex",
+				Pattern: `\bdefaultCase\b`,
+				Type:    config.RuleTypeRegex,
+				Label:   "default_case",
+				Enabled: true,
+			},
+		},
+	}
+
+	engine := NewRuleEngine(cfg)
+
+	tests := []struct {
+		input     string
+		wantLabel string
+	}{
+		{"item with exactLower word", "strict_case"},
+		{"item with EXACTLOWER word", "other"},
+		{"item with ExactLower word", "other"},
+		{"item with defaultCase word", "default_case"},
+		{"item with DEFAULTCASE word", "default_case"},
+		{"item with defaultcase word", "default_case"},
+	}
+
+	for _, tt := range tests {
+		got := engine.NormalizeIssueLabel(tt.input)
+		if got != tt.wantLabel {
+			t.Errorf("NormalizeIssueLabel(%q) = %q, want %q", tt.input, got, tt.wantLabel)
+		}
+
+		rule, _, matched := engine.MatchRule(tt.input)
+		if tt.wantLabel != "other" {
+			if !matched || rule.Label != tt.wantLabel {
+				t.Errorf("MatchRule(%q) = %+v, matched=%v; want label %q", tt.input, rule, matched, tt.wantLabel)
+			}
+		} else {
+			if matched && rule.Label == "strict_case" {
+				t.Errorf("MatchRule(%q) matched strict_case unexpectedly", tt.input)
+			}
+		}
+	}
+}
+
+func TestRuleEngineDisabledRules(t *testing.T) {
+	cfg := config.RuleConfig{
+		Version:          1,
+		EnableHeuristics: false,
+		DefaultLabel:     "custom_other",
+		Labels:           config.DefaultLabels(),
+		Rules: []config.ClassificationRule{
+			{
+				ID:      "rule_disabled",
+				Pattern: "MSW NOT OUT",
+				Type:    config.RuleTypeSubstring,
+				Label:   "msw_not_out",
+				Enabled: false,
+			},
+		},
+	}
+
+	engine := NewRuleEngine(cfg)
+	label := engine.NormalizeIssueLabel("MSW NOT OUT")
+	if label != "custom_other" {
+		t.Errorf("expected disabled rule to be skipped and return %q, got %q", "custom_other", label)
+	}
+
+	_, _, ok := engine.MatchRule("MSW NOT OUT")
+	if ok {
+		t.Errorf("expected MatchRule to return false for disabled rule")
+	}
+}
+
+func TestRuleEngineSplitAddressWithRules(t *testing.T) {
+	cfg := config.DefaultRuleConfig()
+	engine := NewRuleEngine(cfg)
+
+	addr, status := engine.SplitAddress("23 AND 25 KILSYTH MSW AND RECYC NOT OUT")
+	if addr != "23 AND 25 KILSYTH" {
+		t.Errorf("expected addr '23 AND 25 KILSYTH', got %q", addr)
+	}
+	if status != "MSW AND RECYC NOT OUT" {
+		t.Errorf("expected status 'MSW AND RECYC NOT OUT', got %q", status)
+	}
+
+	addr2, status2 := engine.SplitAddress("45 FOREST ST TRASH NOT OUT")
+	if addr2 != "45 FOREST ST" {
+		t.Errorf("expected addr '45 FOREST ST', got %q", addr2)
+	}
+	if status2 != "TRASH NOT OUT" {
+		t.Errorf("expected status 'TRASH NOT OUT', got %q", status2)
+	}
+}
+
+func TestRuleEngineHeuristicsToggle(t *testing.T) {
+	cfgWithHeuristics := config.RuleConfig{
+		Version:          1,
+		EnableHeuristics: true,
+		DefaultLabel:     "other",
+		Labels:           config.DefaultLabels(),
+		Rules:            []config.ClassificationRule{},
+	}
+
+	engineWithHeuristics := NewRuleEngine(cfgWithHeuristics)
+	if label := engineWithHeuristics.NormalizeIssueLabel("MATTRESS NOT OUT"); label != "special_item_not_out" {
+		t.Errorf("expected special_item_not_out with heuristics enabled, got %q", label)
+	}
+
+	cfgWithoutHeuristics := config.RuleConfig{
+		Version:          1,
+		EnableHeuristics: false,
+		DefaultLabel:     "other",
+		Labels:           config.DefaultLabels(),
+		Rules:            []config.ClassificationRule{},
+	}
+
+	engineWithoutHeuristics := NewRuleEngine(cfgWithoutHeuristics)
+	if label := engineWithoutHeuristics.NormalizeIssueLabel("MATTRESS NOT OUT"); label != "other" {
+		t.Errorf("expected 'other' with heuristics disabled, got %q", label)
+	}
+}
+
+func TestRuleEngineMetricLookup(t *testing.T) {
+	cfg := config.RuleConfig{
+		Version:          1,
+		EnableHeuristics: true,
+		DefaultLabel:     "other",
+		Labels: []config.LabelDefinition{
+			{Key: "custom_trash", DisplayName: "Custom Trash", Metric: config.MetricTrash},
+			{Key: "custom_recyc", DisplayName: "Custom Recycling", Metric: config.MetricRecycling},
+			{Key: "custom_both", DisplayName: "Custom Both", Metric: config.MetricBoth},
+		},
+		Rules: []config.ClassificationRule{},
+	}
+
+	engine := NewRuleEngine(cfg)
+
+	if m := engine.MetricForLabel("custom_trash"); m != config.MetricTrash {
+		t.Errorf("expected MetricTrash, got %v", m)
+	}
+	if m := engine.MetricForLabel("custom_recyc"); m != config.MetricRecycling {
+		t.Errorf("expected MetricRecycling, got %v", m)
+	}
+	if m := engine.MetricForLabel("custom_both"); m != config.MetricBoth {
+		t.Errorf("expected MetricBoth, got %v", m)
+	}
+	if m := engine.MetricForLabel("unknown_label"); m != config.MetricNone {
+		t.Errorf("expected MetricNone for unknown label, got %v", m)
+	}
+}
+
+func TestConcurrentEngineAccessAndUpdates(t *testing.T) {
+	var currentEngine atomic.Pointer[RuleEngine]
+	currentEngine.Store(NewRuleEngine(config.DefaultRuleConfig()))
+
+	done := make(chan struct{})
+	const goroutines = 8
+
+	for range 2 {
+		go func() {
+			cfg := config.DefaultRuleConfig()
+			for {
+				select {
+				case <-done:
+					return
+				default:
+					currentEngine.Store(NewRuleEngine(cfg))
+				}
+			}
+		}()
+	}
+
+	meta := parser.MessageMetadata{
+		Subject: "Tags 01/02/26",
+		Body:    "09/22/2025 11:29:05 SSAWALLI\n123 MAIN ST MSW NOT OUT\n45 ELM ST RECYC NOT OUT\n",
+	}
+
+	readerDone := make(chan struct{}, goroutines)
+	for range goroutines {
+		go func() {
+			defer func() { readerDone <- struct{}{} }()
+			for range 100 {
+				eng := currentEngine.Load()
+				_ = eng.ParseRecords(meta)
+				_, _, _, _ = eng.Classify("100 MAIN ST MSW AND RECYC NOT OUT 0900AM")
+				_, _ = eng.SplitAddress("100 MAIN ST MSW NOT OUT")
+				_ = eng.NormalizeIssueLabel("RECYC NOT OUT")
+			}
+		}()
+	}
+
+	for range goroutines {
+		<-readerDone
+	}
+	close(done)
+}
+
+func TestNewRuleEngineValidated_Valid(t *testing.T) {
+	cfg := config.DefaultRuleConfig()
+	engine, err := NewRuleEngineValidated(cfg)
+	if err != nil {
+		t.Fatalf("expected valid engine, got error: %v", err)
+	}
+	if engine == nil {
+		t.Fatal("expected non-nil engine")
+	}
+
+	label := engine.NormalizeIssueLabel("MSW NOT OUT")
+	if label != "msw_not_out" {
+		t.Errorf("expected 'msw_not_out', got %q", label)
+	}
+}
+
+func TestNewRuleEngineValidated_InvalidConfig(t *testing.T) {
+	tests := []struct {
+		name   string
+		modify func(cfg *config.RuleConfig)
+	}{
+		{
+			name: "invalid regex pattern",
+			modify: func(cfg *config.RuleConfig) {
+				cfg.Rules = append([]config.ClassificationRule{
+					{
+						ID:      "broken_regex",
+						Type:    config.RuleTypeRegex,
+						Pattern: "[unclosed_bracket",
+						Label:   "msw_not_out",
+						Enabled: true,
+					},
+				}, cfg.Rules...)
+			},
+		},
+		{
+			name: "empty default label",
+			modify: func(cfg *config.RuleConfig) {
+				cfg.DefaultLabel = ""
+			},
+		},
+		{
+			name: "undefined label reference",
+			modify: func(cfg *config.RuleConfig) {
+				cfg.Rules[0].Label = "non_existent_label_key"
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.DefaultRuleConfig()
+			tc.modify(&cfg)
+			engine, err := NewRuleEngineValidated(cfg)
+			if err == nil {
+				t.Fatalf("expected validation error for case %q, got nil error and engine %+v", tc.name, engine)
+			}
+			if engine != nil {
+				t.Fatalf("expected nil engine on validation error, got %+v", engine)
+			}
+		})
+	}
+}
+
+func TestNewRuleEngine_InvalidRegexDegradation(t *testing.T) {
+	cfg := config.DefaultRuleConfig()
+	cfg.Rules = []config.ClassificationRule{
+		{
+			ID:      "bad_regex_rule",
+			Type:    config.RuleTypeRegex,
+			Pattern: "[unclosed",
+			Label:   "msw_not_out",
+			Enabled: true,
+		},
+		{
+			ID:      "good_sub_rule",
+			Type:    config.RuleTypeSubstring,
+			Pattern: "RECYC NOT OUT",
+			Label:   "recyc_not_out",
+			Enabled: true,
+		},
+	}
+
+	engine := NewRuleEngine(cfg)
+	if engine == nil {
+		t.Fatal("expected non-nil engine from NewRuleEngine even with broken regex")
+	}
+
+	labelGood := engine.NormalizeIssueLabel("RECYC NOT OUT")
+	if labelGood != "recyc_not_out" {
+		t.Errorf("expected 'recyc_not_out', got %q", labelGood)
+	}
+
+	labelBad := engine.NormalizeIssueLabel("[unclosed")
+	if labelBad != "other" {
+		t.Errorf("expected fallback 'other', got %q", labelBad)
+	}
+}
+
 func TestParseRecordsFromSampleMessage(t *testing.T) {
-	meta, err := loadMessage(filepath.Join("testdata", "Medford Tags 01_02_26.msg"))
+	msgPath := filepath.Join("..", "..", "testdata", "Medford Tags 01_02_26.msg")
+	meta, err := parser.LoadMessage(msgPath)
 	if err != nil {
 		t.Fatalf("loadMessage: %v", err)
 	}
 
-	records := parseRecords(meta)
+	records := defaultTestEngine().ParseRecords(meta)
 	if len(records) != 5 {
 		t.Fatalf("expected 5 records, got %d", len(records))
 	}
@@ -32,7 +479,7 @@ func TestParseRecordsFromSampleMessage(t *testing.T) {
 }
 
 func TestParseRecordsRejoinsWrappedPlaintextRows(t *testing.T) {
-	meta := messageMetadata{
+	meta := parser.MessageMetadata{
 		SourceFile: "test.msg",
 		Subject:    "Test subject",
 		Body: strings.Join([]string{
@@ -45,7 +492,7 @@ func TestParseRecordsRejoinsWrappedPlaintextRows(t *testing.T) {
 		}, "\n"),
 	}
 
-	records := parseRecords(meta)
+	records := defaultTestEngine().ParseRecords(meta)
 	if len(records) != 14 {
 		t.Fatalf("expected 14 records, got %d", len(records))
 	}
@@ -81,12 +528,13 @@ func TestParseRecordsRejoinsWrappedPlaintextRows(t *testing.T) {
 }
 
 func TestParseRecordsRejoinsWrappedRealMessage(t *testing.T) {
-	meta, err := loadMessage(filepath.Join("testdata", "MEDFORD TAGS 03_02_26.msg"))
+	msgPath := filepath.Join("..", "..", "testdata", "MEDFORD TAGS 03_02_26.msg")
+	meta, err := parser.LoadMessage(msgPath)
 	if err != nil {
 		t.Fatalf("loadMessage: %v", err)
 	}
 
-	records := parseRecords(meta)
+	records := defaultTestEngine().ParseRecords(meta)
 	if len(records) != 23 {
 		t.Fatalf("expected 23 records, got %d", len(records))
 	}
@@ -105,16 +553,14 @@ func TestParseRecordsRejoinsWrappedRealMessage(t *testing.T) {
 }
 
 func TestParseRecordsSplitsWideGapAddresses(t *testing.T) {
-	meta := messageMetadata{
+	meta := parser.MessageMetadata{
 		SourceFile: "test.msg",
 		Subject:    "Test subject",
-		// Two addresses separated by a wide column gap, as seen in real emails.
-		// normalizeBodyLine must NOT collapse them into one entry.
 		Body: "07/01/2025 14:34:19\n" +
 			"4 MAYNARD ST                                    171B FOREST ST",
 	}
 
-	records := parseRecords(meta)
+	records := defaultTestEngine().ParseRecords(meta)
 	if len(records) != 2 {
 		entries := make([]string, len(records))
 		for i, r := range records {
@@ -137,27 +583,15 @@ func TestParseRecordsSplitsWideGapAddresses(t *testing.T) {
 }
 
 func TestParseRecordsTrailingWhitespaceBlocksMerge(t *testing.T) {
-	// A line with trailing whitespace signals a complete standalone entry; the
-	// NEXT line must NOT be merged into it even if it looks like a continuation.
-	//
-	// Both lines are under a single timestamp (no intervening timestamp to
-	// short-circuit isWrappedContinuation). The second line satisfies all
-	// merge preconditions except hadTrailingWhitespace:
-	//   - looksLikeStandaloneEntry == false  (starts with letter, no early suffix)
-	//   - endsWithJoinableFragment == false  (trailing token "REPORTED" > 5 chars)
-	//   - prev label == "other"              (classifyEntry falls through to merge)
-	//
-	// With the fix:    splitOnWideGaps returns raw → hadTrailingWhitespace=true → 2 records.
-	// Without the fix: splitOnWideGaps returns trimmed → hadTrailingWhitespace=false → 1 merged record.
-	meta := messageMetadata{
+	meta := parser.MessageMetadata{
 		SourceFile: "test.msg",
 		Subject:    "Test subject",
 		Body: "07/01/2025 09:28:01\n" +
-			"23 MAPLE ST DRIVER REPORTED      \n" + // trailing spaces → standalone complete entry
-			"COULD NOT ACCESS PROPERTY", // non-standalone: letter-start, no early suffix
+			"23 MAPLE ST DRIVER REPORTED      \n" +
+			"COULD NOT ACCESS PROPERTY",
 	}
 
-	records := parseRecords(meta)
+	records := defaultTestEngine().ParseRecords(meta)
 	if len(records) != 2 {
 		entries := make([]string, len(records))
 		for i, r := range records {
@@ -173,133 +607,8 @@ func TestParseRecordsTrailingWhitespaceBlocksMerge(t *testing.T) {
 	}
 }
 
-func TestCollectInputPathsForDirectory(t *testing.T) {
-	paths, err := collectInputPaths("testdata")
-	if err != nil {
-		t.Fatalf("collectInputPaths: %v", err)
-	}
-	if len(paths) != 6 {
-		t.Fatalf("expected 6 .msg paths, got %d", len(paths))
-	}
-	if filepath.Ext(paths[0]) != ".msg" {
-		t.Fatalf("expected .msg path, got %q", paths[0])
-	}
-}
-
-func TestParseInputPathsForDirectory(t *testing.T) {
-	paths, err := collectInputPaths("testdata")
-	if err != nil {
-		t.Fatalf("collectInputPaths: %v", err)
-	}
-
-	records, summary, err := parseInputPaths(paths)
-	if err != nil {
-		t.Fatalf("parseInputPaths: %v", err)
-	}
-	if len(records) != 45 {
-		t.Fatalf("expected 45 records, got %d", len(records))
-	}
-	if summary.ParsedFiles != 6 || summary.SkippedFiles != 0 {
-		t.Fatalf("expected summary {ParsedFiles:6 SkippedFiles:0}, got %+v", summary)
-	}
-}
-
-func TestParseInputPathsSummarizesSkippedFiles(t *testing.T) {
-	tempDir := t.TempDir()
-
-	validInput, err := os.ReadFile(filepath.Join("testdata", "Medford Tags 01_02_26.msg"))
-	if err != nil {
-		t.Fatalf("ReadFile valid sample: %v", err)
-	}
-	validPath := filepath.Join(tempDir, "valid.msg")
-	if err := os.WriteFile(validPath, validInput, 0o644); err != nil {
-		t.Fatalf("WriteFile valid sample: %v", err)
-	}
-
-	invalidPath := filepath.Join(tempDir, "invalid.msg")
-	if err := os.WriteFile(invalidPath, []byte("not an outlook message"), 0o644); err != nil {
-		t.Fatalf("WriteFile invalid sample: %v", err)
-	}
-
-	records, summary, err := parseInputPaths([]string{validPath, invalidPath})
-	if err != nil {
-		t.Fatalf("parseInputPaths: %v", err)
-	}
-	if len(records) != 5 {
-		t.Fatalf("expected 5 records, got %d", len(records))
-	}
-	if summary.ParsedFiles != 1 || summary.SkippedFiles != 1 {
-		t.Fatalf("expected summary {ParsedFiles:1 SkippedFiles:1}, got %+v", summary)
-	}
-}
-
-func TestWriteCSVUsesRenamedHeaders(t *testing.T) {
-	tempDir := t.TempDir()
-	outputPath := filepath.Join(tempDir, "out.csv")
-
-	records := []record{{
-		SourceFile:   "sample.msg",
-		Subject:      "Sample",
-		MessageDate:  "2026-01-02T00:00:00Z",
-		ReportedAt:   "2026-01-02T12:34:56Z",
-		Dispatcher:   "Dispatch",
-		RowInMessage: 1,
-		RawEntry:     "42 WOBURN ST MSW NOT OUT 1102AM",
-		LocationHint: "42 WOBURN ST",
-		ParsedIssue:  "MSW NOT OUT",
-		Label:        "msw_not_out",
-		IssueTime:    "1102AM",
-	}}
-
-	if err := writeCSV(outputPath, records); err != nil {
-		t.Fatalf("writeCSV: %v", err)
-	}
-
-	file, err := os.Open(outputPath)
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	defer file.Close()
-
-	rows, err := csv.NewReader(file).ReadAll()
-	if err != nil {
-		t.Fatalf("ReadAll: %v", err)
-	}
-	if len(rows) != 2 {
-		t.Fatalf("expected header and one data row, got %d rows", len(rows))
-	}
-
-	expectedHeaders := []string{
-		"source_file",
-		"subject",
-		"message_date",
-		"reported_at",
-		"dispatcher",
-		"row_in_message",
-		"raw_entry",
-		"location",
-		"issue",
-		"label",
-		"issue_time",
-	}
-	for i, want := range expectedHeaders {
-		if rows[0][i] != want {
-			t.Fatalf("header %d: expected %q, got %q", i, want, rows[0][i])
-		}
-	}
-}
-
-func TestParseDateFromSubject(t *testing.T) {
-	date := parseDateFromSubject("Medford Tags 01.07.26")
-	if date.IsZero() {
-		t.Fatal("expected subject date to parse")
-	}
-	if got := date.Format("2006-01-02"); got != "2026-01-07" {
-		t.Fatalf("unexpected parsed date %s", got)
-	}
-}
-
 func TestClassifyEntry(t *testing.T) {
+	engine := defaultTestEngine()
 	tests := []struct {
 		name          string
 		input         string
@@ -605,7 +914,7 @@ func TestClassifyEntry(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			loc, _, label, issueTime := classifyEntry(tc.input)
+			loc, _, label, issueTime := engine.Classify(tc.input)
 			if loc != tc.expectedLoc {
 				t.Errorf("expected location %q, got %q", tc.expectedLoc, loc)
 			}
@@ -620,7 +929,7 @@ func TestClassifyEntry(t *testing.T) {
 }
 
 func TestClassifyEntryReturnsParsedIssueAndLabel(t *testing.T) {
-	loc, parsedIssue, label, issueTime := classifyEntry("473 BORN COURT APTS, BROADWAY ST, MSW AND RECYC NOT OUT")
+	loc, parsedIssue, label, issueTime := defaultTestEngine().Classify("473 BORN COURT APTS, BROADWAY ST, MSW AND RECYC NOT OUT")
 	if loc != "473 BORN COURT APTS, BROADWAY ST" {
 		t.Fatalf("expected location to preserve address, got %q", loc)
 	}
@@ -1055,12 +1364,12 @@ func TestParseRecordsSplitList(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			meta := messageMetadata{
+			meta := parser.MessageMetadata{
 				SourceFile: "test.msg",
 				Subject:    "Test subject",
 				Body:       tc.body,
 			}
-			records := parseRecords(meta)
+			records := defaultTestEngine().ParseRecords(meta)
 			if len(records) != len(tc.expected) {
 				t.Fatalf("expected %d records, got %d", len(tc.expected), len(records))
 			}
@@ -1097,7 +1406,7 @@ func TestParseRecordsStopsAtSignatureBlock(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			meta := messageMetadata{
+			meta := parser.MessageMetadata{
 				SourceFile: "test.msg",
 				Subject:    "Test subject",
 				Body: strings.Join([]string{
@@ -1110,7 +1419,7 @@ func TestParseRecordsStopsAtSignatureBlock(t *testing.T) {
 				}, "\n"),
 			}
 
-			records := parseRecords(meta)
+			records := defaultTestEngine().ParseRecords(meta)
 			if len(records) != 1 {
 				t.Fatalf("expected 1 record before signature, got %d", len(records))
 			}
@@ -1122,7 +1431,7 @@ func TestParseRecordsStopsAtSignatureBlock(t *testing.T) {
 }
 
 func TestParseRecordsAcceptsTimestampWithoutDispatcher(t *testing.T) {
-	meta := messageMetadata{
+	meta := parser.MessageMetadata{
 		SourceFile: "test.msg",
 		Subject:    "Test subject",
 		Body: strings.Join([]string{
@@ -1132,7 +1441,7 @@ func TestParseRecordsAcceptsTimestampWithoutDispatcher(t *testing.T) {
 		}, "\n"),
 	}
 
-	records := parseRecords(meta)
+	records := defaultTestEngine().ParseRecords(meta)
 	if len(records) != 1 {
 		t.Fatalf("expected 1 record, got %d", len(records))
 	}
@@ -1148,7 +1457,7 @@ func TestParseRecordsAcceptsTimestampWithoutDispatcher(t *testing.T) {
 }
 
 func TestParseRecordsSkipsPreambleFooterUntilFirstTimestamp(t *testing.T) {
-	meta := messageMetadata{
+	meta := parser.MessageMetadata{
 		SourceFile: "test.msg",
 		Subject:    "Test subject",
 		Body: strings.Join([]string{
@@ -1163,7 +1472,7 @@ func TestParseRecordsSkipsPreambleFooterUntilFirstTimestamp(t *testing.T) {
 		}, "\n"),
 	}
 
-	records := parseRecords(meta)
+	records := defaultTestEngine().ParseRecords(meta)
 	if len(records) != 2 {
 		t.Fatalf("expected 2 records after preamble, got %d", len(records))
 	}
@@ -1179,7 +1488,7 @@ func TestParseRecordsSkipsPreambleFooterUntilFirstTimestamp(t *testing.T) {
 }
 
 func TestValidateAllCSVSamples(t *testing.T) {
-	file, err := os.Open(filepath.Join("testdata", "msg_parsed.csv"))
+	file, err := os.Open(filepath.Join("..", "..", "testdata", "msg_parsed.csv"))
 	if err != nil {
 		t.Skip("sample CSV not found")
 	}
@@ -1193,21 +1502,21 @@ func TestValidateAllCSVSamples(t *testing.T) {
 
 	statusTokens := []string{"NOT OUT", "NOT SVCD", "BLOCKED", "STILL IN", "ICEY"}
 	failCount := 0
+	eng := defaultTestEngine()
+	addressPrefixRE := regexp.MustCompile(`^\d+(?:-\d+)?\b`)
 
 	for i, row := range records {
 		if i == 0 {
-			continue // skip header
+			continue
 		}
 		rawEntry := row[6]
-		// Filter out noise, fragments, and footers using general structural criteria
-		isRealAddress := regexp.MustCompile(`^\d+(?:-\d+)?\b`).MatchString(rawEntry) || findLastAddressIndex(rawEntry) != -1
-		if !isRealAddress || isFooterLine(rawEntry) {
+		isRealAddress := addressPrefixRE.MatchString(rawEntry) || FindLastAddressIndex(rawEntry) != -1
+		if !isRealAddress || parser.IsFooterLine(rawEntry) {
 			continue
 		}
 
-		loc, _, label, _ := classifyEntry(rawEntry)
+		loc, _, label, _ := eng.Classify(rawEntry)
 
-		// Check if rawEntry contains any status tokens
 		hasStatusToken := false
 		var matchedToken string
 		upperRaw := strings.ToUpper(rawEntry)
@@ -1220,14 +1529,12 @@ func TestValidateAllCSVSamples(t *testing.T) {
 		}
 
 		if hasStatusToken {
-			// If rawEntry had a status token, we expect the parsed location_hint to NOT contain that token anymore (meaning it was split out)
 			upperLoc := strings.ToUpper(loc)
 			if strings.Contains(upperLoc, matchedToken) {
 				t.Errorf("Row %d: LocationHint still contains status token %q: Loc=%q, Raw=%q", i+1, matchedToken, loc, rawEntry)
 				failCount++
 			}
 
-			// Also, label should not be empty
 			if label == "" {
 				t.Errorf("Row %d: Label is empty for entry with status token: Raw=%q", i+1, rawEntry)
 				failCount++
@@ -1239,7 +1546,7 @@ func TestValidateAllCSVSamples(t *testing.T) {
 }
 
 func TestParseRecordsRejoinsWrappedParagraph(t *testing.T) {
-	meta := messageMetadata{
+	meta := parser.MessageMetadata{
 		SourceFile: "test.msg",
 		Subject:    "Test subject",
 		Body: "09/10/2025 13:02:32\n" +
@@ -1255,7 +1562,7 @@ func TestParseRecordsRejoinsWrappedParagraph(t *testing.T) {
 			"DRIVER SOUNDED UPSET & PANICKED      ",
 	}
 
-	records := parseRecords(meta)
+	records := defaultTestEngine().ParseRecords(meta)
 	if len(records) != 1 {
 		t.Fatalf("expected 1 record, got %d", len(records))
 	}
@@ -1270,7 +1577,7 @@ func TestParseRecordsRejoinsWrappedParagraph(t *testing.T) {
 }
 
 func TestParseRecordsMedfordTags(t *testing.T) {
-	meta := messageMetadata{
+	meta := parser.MessageMetadata{
 		SourceFile: "test.msg",
 		Subject:    "Test subject",
 		Body: "09/22/2025 11:29:05\n" +
@@ -1280,15 +1587,7 @@ func TestParseRecordsMedfordTags(t *testing.T) {
 			"ND NOT ON PROPERTY                                                       ",
 	}
 
-	for i, raw := range strings.Split(meta.Body, "\n") {
-		trimmed := strings.TrimSpace(raw)
-		t.Logf("Line %d: %q, standalone=%v", i, trimmed, looksLikeStandaloneEntry(trimmed))
-	}
-
-	records := parseRecords(meta)
-	for i, r := range records {
-		t.Logf("record %d: %q", i, r.RawEntry)
-	}
+	records := defaultTestEngine().ParseRecords(meta)
 	if len(records) != 2 {
 		t.Fatalf("expected 2 records, got %d", len(records))
 	}

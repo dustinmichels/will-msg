@@ -1,4 +1,4 @@
-package main
+package gui
 
 import (
 	"errors"
@@ -16,6 +16,9 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"github.com/ncruces/zenity"
+
+	"will-msg/internal/config"
+	"will-msg/internal/engine"
 )
 
 var activeRuleEditorWindow fyne.Window
@@ -24,7 +27,7 @@ var activeRuleEditorWindow fyne.Window
 type RuleManagerView struct {
 	window        fyne.Window
 	app           fyne.App
-	workingConfig RuleConfig
+	workingConfig config.RuleConfig
 	configPath    string
 	selectedIndex int
 
@@ -88,15 +91,15 @@ func NewRuleManagerView(a fyne.App, w fyne.Window, onApplied func()) *RuleManage
 
 // NewRuleManagerViewWithPath creates a RuleManagerView with a specific configuration file path.
 func NewRuleManagerViewWithPath(a fyne.App, w fyne.Window, configPath string, onApplied func()) *RuleManagerView {
-	var cfg RuleConfig
+	var cfg config.RuleConfig
 	if configPath != "" {
-		loaded, err := LoadConfigFromPath(configPath)
+		loaded, err := config.LoadConfigFromPath(configPath)
 		if err != nil {
-			loaded = DefaultRuleConfig()
+			loaded = config.DefaultRuleConfig()
 		}
 		cfg = loaded.Clone()
 	} else {
-		cfg = LoadConfig().Clone()
+		cfg = config.LoadConfig().Clone()
 	}
 	view := &RuleManagerView{
 		window:        w,
@@ -450,7 +453,7 @@ func (v *RuleManagerView) runSandbox() {
 		return
 	}
 
-	tempEngine := NewRuleEngine(v.workingConfig)
+	tempEngine := engine.NewRuleEngine(v.workingConfig)
 	loc, issue, label, issueTime := tempEngine.Classify(text)
 	rule, ruleIdx, matched := tempEngine.MatchRule(issue)
 	metric := tempEngine.MetricForLabel(label)
@@ -484,11 +487,11 @@ func (v *RuleManagerView) runSandbox() {
 	}
 
 	switch metric {
-	case MetricTrash:
+	case config.MetricTrash:
 		v.sandboxMetricLabel.SetText("Trash")
-	case MetricRecycling:
+	case config.MetricRecycling:
 		v.sandboxMetricLabel.SetText("Recycling")
-	case MetricBoth:
+	case config.MetricBoth:
 		v.sandboxMetricLabel.SetText("Both (Trash + Recycling)")
 	default:
 		v.sandboxMetricLabel.SetText("None")
@@ -598,7 +601,7 @@ func (v *RuleManagerView) showResetConfirm() {
 		"Are you sure you want to reset all classification rules and labels to built-in defaults?\nAny custom rules will be replaced.",
 		func(confirmed bool) {
 			if confirmed {
-				v.workingConfig = DefaultRuleConfig()
+				v.workingConfig = config.DefaultRuleConfig()
 				v.selectedIndex = -1
 				v.refreshUI()
 			}
@@ -631,7 +634,7 @@ func (v *RuleManagerView) showEditRuleDialog(index int) {
 }
 
 // showRuleFormDialog opens a custom dialog to add or edit a ClassificationRule.
-func (v *RuleManagerView) showRuleFormDialog(initialRule *ClassificationRule, editIndex int) {
+func (v *RuleManagerView) showRuleFormDialog(initialRule *config.ClassificationRule, editIndex int) {
 	isNew := initialRule == nil
 
 	title := "Add Classification Rule"
@@ -722,11 +725,11 @@ func (v *RuleManagerView) showRuleFormDialog(initialRule *ClassificationRule, ed
 				return
 			}
 
-			ruleType := RuleType(typeSelect.Selected)
-			if ruleType == RuleTypeSubstring {
+			ruleType := config.RuleType(typeSelect.Selected)
+			if ruleType == config.RuleTypeSubstring {
 				pat = strings.ToUpper(pat)
-			} else if ruleType == RuleTypeRegex {
-				if _, err := compileRegexPattern(pat); err != nil {
+			} else if ruleType == config.RuleTypeRegex {
+				if _, err := config.CompileRegexPattern(pat); err != nil {
 					dialog.ShowError(fmt.Errorf("invalid regex pattern: %w", err), v.window)
 					return
 				}
@@ -736,7 +739,7 @@ func (v *RuleManagerView) showRuleFormDialog(initialRule *ClassificationRule, ed
 			if targetLabel == "[+ Add New Label...]" {
 				key := strings.TrimSpace(customKeyEntry.Text)
 				displayName := strings.TrimSpace(customDisplayNameEntry.Text)
-				metric := MetricContribution(customMetricSelect.Selected)
+				metric := config.MetricContribution(customMetricSelect.Selected)
 
 				if key == "" {
 					dialog.ShowError(errors.New("new label key cannot be empty"), v.window)
@@ -755,13 +758,13 @@ func (v *RuleManagerView) showRuleFormDialog(initialRule *ClassificationRule, ed
 					}
 				}
 				if existingIdx >= 0 {
-					v.workingConfig.Labels[existingIdx] = LabelDefinition{
+					v.workingConfig.Labels[existingIdx] = config.LabelDefinition{
 						Key:         key,
 						DisplayName: displayName,
 						Metric:      metric,
 					}
 				} else {
-					v.workingConfig.Labels = append(v.workingConfig.Labels, LabelDefinition{
+					v.workingConfig.Labels = append(v.workingConfig.Labels, config.LabelDefinition{
 						Key:         key,
 						DisplayName: displayName,
 						Metric:      metric,
@@ -782,7 +785,7 @@ func (v *RuleManagerView) showRuleFormDialog(initialRule *ClassificationRule, ed
 				ruleID = fmt.Sprintf("%s_%d", strings.ToLower(targetLabel), time.Now().UnixNano())
 			}
 
-			newRule := ClassificationRule{
+			newRule := config.ClassificationRule{
 				ID:          ruleID,
 				Pattern:     pat,
 				Type:        ruleType,
@@ -808,21 +811,21 @@ func (v *RuleManagerView) showRuleFormDialog(initialRule *ClassificationRule, ed
 
 // ApplyChanges validates the configuration, saves it to disk, and updates the active engine.
 func (v *RuleManagerView) ApplyChanges() error {
-	if err := v.workingConfig.Validate(); err != nil {
+	newEngine, err := engine.NewRuleEngineValidated(v.workingConfig)
+	if err != nil {
 		return fmt.Errorf("configuration validation failed: %w", err)
 	}
 
 	if v.configPath != "" {
-		if err := SaveConfigToPath(v.configPath, v.workingConfig); err != nil {
+		if err := config.SaveConfigToPath(v.configPath, v.workingConfig); err != nil {
 			return fmt.Errorf("failed to save rules to disk: %w", err)
 		}
 	} else {
-		if err := SaveConfig(v.workingConfig); err != nil {
+		if err := config.SaveConfig(v.workingConfig); err != nil {
 			return fmt.Errorf("failed to save rules to disk: %w", err)
 		}
 	}
-	SetDefaultEngine(NewRuleEngine(v.workingConfig))
-
+	SetDefaultEngine(newEngine)
 	if v.onApplied != nil {
 		v.onApplied()
 	}
@@ -863,7 +866,7 @@ func (v *RuleManagerView) exportRules() {
 			return
 		}
 
-		if err := ExportConfigFile(path, v.workingConfig); err != nil {
+		if err := config.ExportConfigFile(path, v.workingConfig); err != nil {
 			fyne.Do(func() {
 				dialog.ShowError(fmt.Errorf("failed to export rules: %w", err), v.window)
 			})
@@ -894,7 +897,7 @@ func (v *RuleManagerView) importRules() {
 			return
 		}
 
-		imported, err := ImportConfigFile(path)
+		imported, err := config.ImportConfigFile(path)
 		if err != nil {
 			fyne.Do(func() {
 				dialog.ShowError(fmt.Errorf("failed to import rules: %w", err), v.window)
