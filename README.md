@@ -12,6 +12,7 @@ The parser is tuned for the Medford tag emails in `data/`. It accepts either one
 - special_item_not_out
 - recyc_contaminated
 - blocked
+- overflowing
 - other
 
 ## `msgcat` — inspect a single `.msg` file

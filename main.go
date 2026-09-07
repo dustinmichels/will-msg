@@ -31,6 +31,7 @@ var (
 	precedingRejectRE = regexp.MustCompile(`(?i)\b(?:WHOLE|OF|ON|IN|THE|BOTH|EACH|EVERY|THIS|THAT|TO|FOR|BY)\s*$`)
 	directionalRE     = regexp.MustCompile(`^(?i)\s+(?:WEST|W|EAST|E|NORTH|N|SOUTH|S)\b`)
 	blockedStatusRE   = regexp.MustCompile(`\bBLOCK(?:ED|ING|S)?\b`)
+	overflowStatusRE  = regexp.MustCompile(`\b(?:OVERFLOW(?:ING|ED|S)|OVERLOAD(?:ED|ING|S)?)\b`)
 	signatureLineRE   = regexp.MustCompile(`^(?:regards|best|sincerely|thank you|thanks)[,!.\s]*$`)
 	wideGapRE         = regexp.MustCompile(`\s{3,}`)
 )
@@ -42,16 +43,23 @@ type issuePattern struct {
 
 var issuePatterns = []issuePattern{
 	{Label: "msw_and_recyc_not_out", Pattern: "MSW AND RECYC NOT OUT"},
+	{Label: "msw_and_recyc_not_out", Pattern: "MSW AND RCY NOT OUT"},
 	{Label: "msw_and_recyc_not_out", Pattern: "RECYC AND MSW NOT OUT"},
+	{Label: "msw_and_recyc_not_out", Pattern: "RCY AND MSW NOT OUT"},
 	{Label: "msw_and_recyc_not_out", Pattern: "TRASH AND RECYCLING NOT OUT"},
 	{Label: "msw_and_recyc_not_out", Pattern: "TRASH AND RECYC NOT OUT"},
+	{Label: "msw_and_recyc_not_out", Pattern: "TRASH AND RCY NOT OUT"},
 	{Label: "msw_and_recyc_not_out", Pattern: "TRASH/RECYC NOT OUT"},
+	{Label: "msw_and_recyc_not_out", Pattern: "TRASH/RCY NOT OUT"},
 	{Label: "msw_and_recyc_not_out", Pattern: "TRASH / RECYC NOT OUT"},
+	{Label: "msw_and_recyc_not_out", Pattern: "TRASH / RCY NOT OUT"},
 	{Label: "recyc_not_out", Pattern: "RECYC NOT OUT"},
+	{Label: "recyc_not_out", Pattern: "RCY NOT OUT"},
 	{Label: "recyc_not_out", Pattern: "RECYCLE NOT OUT"},
 	{Label: "recyc_not_out", Pattern: "RECYCLING NOT OUT"},
 	{Label: "recyc_not_out", Pattern: "RECYCCLE NOT OUT"},
 	{Label: "recyc_not_out", Pattern: "NOT OUT RECYC"},
+	{Label: "recyc_not_out", Pattern: "NOT OUT RCY"},
 	{Label: "msw_not_out", Pattern: "MSW NOT OUT"},
 	{Label: "msw_not_out", Pattern: "TRASH NOT OUT"},
 	{Label: "special_item_not_out", Pattern: "BULK ITEM NOT OUT"},
@@ -60,9 +68,11 @@ var issuePatterns = []issuePattern{
 	{Label: "special_item_not_out", Pattern: "SOFA NOT OUT"},
 	{Label: "recyc_contaminated", Pattern: "RECY CONTAM"},
 	{Label: "recyc_contaminated", Pattern: "RECYC CONTAM"},
+	{Label: "recyc_contaminated", Pattern: "RCY CONTAM"},
 	{Label: "recyc_contaminated", Pattern: "RECYCLE CONTAM"},
 	{Label: "recyc_contaminated", Pattern: "RECYCLING CONTAM"},
 	{Label: "recyc_contaminated", Pattern: "CONTAMINATED RECYC"},
+	{Label: "recyc_contaminated", Pattern: "CONTAMINATED RCY"},
 	{Label: "recyc_contaminated", Pattern: "CONTAMINATED RECYCLE"},
 	{Label: "recyc_contaminated", Pattern: "CONTAMINATED RECYCLING"},
 	{Label: "recyc_contaminated", Pattern: "RECYCLING CONTAMINATED"},
@@ -500,7 +510,7 @@ func isCommonWord(w string) bool {
 		"NO", "NOT",
 		"OF", "ON", "ONE", "ONLY", "ONLINE", "OR", "OTHER", "OUR", "OUT",
 		"PANICKED", "PARKWAY", "PICK", "PKWY", "PL", "PLACE", "PLEASE", "PROPERTY",
-		"RD", "READY", "RECYC", "RECYCLE", "RECYCLING", "ROAD",
+		"RCY", "RD", "READY", "RECYC", "RECYCLE", "RECYCLING", "ROAD",
 		"SAFETY", "SAME", "SERVICE", "SERVICED", "SHE", "SHOULD", "SIDE", "SNOW", "SNOWBANK", "SOFA", "SOME", "SQ", "SQUARE", "ST", "STE", "STREET", "SUITE", "SUITES", "SVCD",
 		"TER", "TERR", "TERRACE", "THAT", "THE", "THEIR", "THEM", "THEN", "THERE", "THESE", "THEY", "THIS", "THREE", "TICKET", "TKT", "TO", "TOY", "TOYS", "TRASH", "TRUCK", "TWO",
 		"UNABLE", "UNIT", "UNITS", "UP", "UPSET",
@@ -717,6 +727,9 @@ func normalizeIssueLabel(status string) string {
 	}
 	if blockedStatusRE.MatchString(sUpper) {
 		return "blocked"
+	}
+	if overflowStatusRE.MatchString(sUpper) {
+		return "overflowing"
 	}
 
 	s = strings.ReplaceAll(sUpper, "NOT SVCD", "NOT SERVICED")
