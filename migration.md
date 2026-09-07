@@ -3,9 +3,9 @@
 Migrate `fyne-version/will-msg` (Go + Fyne desktop app) to `wails-version/will-msg`
 (Go + Wails backend, **bun + Vue 3 + Tailwind** frontend).
 
-Scope of Phases 0–12: **feature parity + modern frontend stack, nothing else.** New
-capabilities, extra dependencies, and packaging changes live in Phase 13 (optional) and are
-not required for the migration to be done.
+Scope of Phases 0–12: **feature parity + modern frontend stack.** Deliberate behavior changes are
+limited to separate file/folder pickers, visible skipped-file errors, a dirty-rules exit guard, and
+a parsing-only animation that honors reduced motion. Everything else belongs in Phase 13.
 
 The Go core is already UI-agnostic — only `internal/gui/` (1,677 lines of Fyne) is discarded and rebuilt.
 
@@ -13,54 +13,58 @@ The Go core is already UI-agnostic — only `internal/gui/` (1,677 lines of Fyne
 
 ## 0. Decisions (settle before writing code)
 
-- [ ] **Wails v2.15.0 (stable)**, not v3 (beta as of 2026-09). Single-window app; v3's headline
-      feature (native multi-window) is not needed — the Fyne "Rules & Labels" second window
-      becomes an in-app route/modal. Revisit v3 only if multi-window is wanted later.
-- [ ] **Frontend stack**: bun (package manager + task runner) · Vite · Vue 3 (`<script setup>`, TS)
+- [x] **Pin Wails v2.15.0** in both `go.mod` and the CLI install; do not use `@latest`. Wails v3 is
+      still beta as of 2026-09, and this is a single-window app. Revisit v3 only after this
+      migration; do not mix v2 and v3 APIs or generated bindings.
+- [x] **Frontend stack**: bun (package manager + task runner) · Vite · Vue 3 (`<script setup>`, TS)
       · Tailwind CSS v4 via `@tailwindcss/vite` (no `tailwind.config.js`, no PostCSS config).
-- [ ] **State**: Pinia. Two stores (`parse`, `rules`); the rules editor has real cross-component
+- [x] **State**: Pinia. Two stores (`parse`, `rules`); the rules editor has real cross-component
       state (working config + selection + dirty flag) that prop-drilling would smear.
-- [ ] **Go core is copied verbatim, not rewritten.** `internal/{config,engine,parser,scanner,stats}`
-      import zero UI packages (verified: no `fyne.io/*`, no `ncruces/zenity`).
-- [ ] **`internal/gui/` is deleted, not ported.** Its business logic (sandbox eval, config
+- [x] **Copy the Go core before changing it.** `internal/{config,engine,parser,scanner,stats}`
+      import zero UI packages (verified). Limit core changes to the JSON tags required by the
+      Wails boundary; classification, scanning, config, and CSV behavior stay frozen.
+- [x] **`internal/gui/` is deleted, not ported.** Its business logic (sandbox eval, config
       validate+persist, import/export) moves into a bound Go service layer.
-- [ ] **Config location and schema unchanged**: `os.UserConfigDir()/will-msg/rules.json`
+- [x] **Config location and schema unchanged**: `os.UserConfigDir()/will-msg/rules.json`
       (macOS `~/Library/Application Support/will-msg/rules.json`), `version: 1`.
       Existing users' rules must carry over untouched.
-- [ ] **CSV contract frozen**: 11 columns, exact order/headers
+- [x] **CSV contract frozen**: 11 columns, exact order/headers
       `source_file, subject, message_date, reported_at, dispatcher, row_in_message, raw_entry,
-    location, issue, label, issue_time` (`engine.CSVHeaders`, `Record.ToRow`).
-- [ ] Decide fate of `fyne-version/`: keep as read-only reference during the migration, delete at
-      cutover (Phase 12). Do not develop in both.
+location, issue, label, issue_time` (`engine.CSVHeaders`, `Record.ToRow`).
+- [x] Keep `fyne-version/` read-only through validation. At cutover, tag the last Fyne commit
+      `legacy-fyne`, promote `wails-version/will-msg/` to the repository root, then delete both
+      versioned working directories. Do not develop in both trees.
 
 ---
 
 ## 1. Prerequisites & scaffold
 
-- [ ] Install Wails CLI: `go install github.com/wailsapp/wails/v2/cmd/wails@latest` (currently missing on this machine).
+- [x] Install the pinned CLI:
+      `go install github.com/wailsapp/wails/v2/cmd/wails@v2.15.0`; `wails version` reports
+      `v2.15.0`.
 - [ ] `wails doctor` — confirm Xcode CLT on macOS.
-- [ ] bun 1.4.0 ✔ present; Go ✔ present; `mise` ✔ present (`wails-version/will-msg/mise.toml` pins `go = "1.27.1"`).
-- [ ] Scaffold into a temp dir (target dir already contains `data/`, `data-new/`, `mise.toml`, `.gitignore`):
-      `wails init -n will-msg -t vue-ts -d /tmp/wails-scaffold`
-- [ ] Copy scaffold into `wails-version/will-msg/`: `main.go`, `app.go`, `wails.json`, `go.mod`,
-      `go.sum`, `frontend/`, `build/`.
-      Keep the existing `mise.toml` and `.gitignore`; merge scaffold ignores into them.
+- [x] bun 1.4.0, Go 1.27.1, and `mise` are present; `mise.toml` pins the executable toolchain.
+- [x] Scaffold `wails-version/will-msg/` with the official `vue-ts` template. Preserve the existing
+      `data/`, `data-new/`, `truck.png`, and `mise.toml`; keep scaffold platform files under
+      `build/`.
 - [ ] Replace npm with bun in `wails.json`:
       `"frontend:install": "bun install"`, `"frontend:build": "bun run build"`,
       `"frontend:dev:watcher": "bun run dev"`, `"frontend:dev:serverUrl": "auto"`.
       Delete `frontend/package-lock.json`; commit `frontend/bun.lock`.
-- [ ] Set `wails.json` `info`: `productName: "will-msg"`, `companyName`, `copyright`, and
-      `productVersion` carried over from `FyneApp.toml` (`Version = 1.0.0`, `Build = 35`,
-      `ID = io.github.dustinmichels.willmsg`). A version bump is a separate release decision,
-      not part of this migration.
-- [ ] `wails init` already wrote `go.mod` — edit its `module` directive to `will-msg` (do **not**
-      run `go mod init`; it fails on an existing file). The module name must stay `will-msg` so
-      `will-msg/internal/...` imports keep working.
-- [ ] Verify the empty shell runs: `wails dev` opens a window; `wails build` produces `build/bin/will-msg.app`.
+- [ ] Set `wails.json.info`: `productName: "will-msg"`, `companyName: "Dustin Michels"`,
+      `copyright: "Copyright © 2026 Dustin Michels"`, and `productVersion: "1.0.0"`. Wails has no
+      bundle-ID/build-number fields there: set `CFBundleIdentifier =
+      io.github.dustinmichels.willmsg` and `CFBundleVersion = 35` in both
+      `build/darwin/Info.plist` and `Info.dev.plist`; keep `CFBundleShortVersionString` driven by
+      `productVersion`. A version bump is a separate release decision.
+- [x] Keep the scaffolded module directive as `module will-msg`; do **not** run `go mod init`.
+      The name must stay stable so copied `will-msg/internal/...` imports compile.
+- [ ] Verify the empty shell: `wails dev` opens a window and `wails build` produces
+      `build/bin/will-msg.app`.
 
 ---
 
-## 2. Port the Go core (no behavior change)
+## 2. Port the Go core (behavior frozen except bridge serialization)
 
 - [ ] Copy verbatim: `internal/config/`, `internal/engine/`, `internal/parser/`, `internal/scanner/`,
       `internal/stats/` (+ their `_test.go` files).
@@ -70,128 +74,151 @@ The Go core is already UI-agnostic — only `internal/gui/` (1,677 lines of Fyne
 - [ ] `go.mod`: require `github.com/wailsapp/wails/v2` + `github.com/willthrom/outlook-msg-parser`.
       Must **not** contain `fyne.io/fyne/v2`, `fyne.io/systray`, `github.com/ncruces/zenity`,
       `github.com/go-gl/*`, `github.com/fyne-io/*`.
-- [ ] Reconcile Go version: `mise.toml` pins `1.27.1`, old `go.mod` says `go 1.23.0`. Pick one.
+- [ ] Keep `go 1.25.0` in `go.mod` (the Wails v2.15 minimum) and Go `1.27.1` in `mise.toml`
+      (the reproducible build toolchain). These fields have different purposes and need not match.
 - [ ] `go mod tidy && go build ./... && go test ./internal/...` — all pre-existing engine/parser/
-      scanner/stats/config tests green, unchanged.
+      scanner/stats/config tests green before service work begins.
 - [ ] **Add JSON tags** so bindings emit stable snake_case instead of Go field names.
       `engine.Record` has **no** struct tags today — TS bindings would be `SourceFile`, `Subject`, …
       Tag them to match `CSVHeaders` (`json:"source_file"` …, `RowInMessage → row_in_message`).
       Same for `scanner.MessageSource` (`path`, `in_zip`, `zip_path`, `display_name`).
       `config.*` already has tags — leave them exactly as-is (`rules.json` compatibility).
-- [ ] Add a tag-coverage test: marshal a `Record`, assert its keys equal `engine.CSVHeaders`.
+- [ ] Add serialization-contract tests: marshalled `Record` keys equal `engine.CSVHeaders` as a
+      set, and `MessageSource` keys are exactly `path,in_zip,zip_path,display_name`.
 
 ---
 
 ## 3. Backend service layer (bound Go API)
 
-Create `internal/appservice/` (or keep on the scaffold's `App` struct) holding `ctx context.Context`
-from `OnStartup`, an `atomic.Pointer[engine.RuleEngine]` — the port of `gui.DefaultEngine` /
-`SetDefaultEngine` / `ReloadDefaultEngine` (gui.go:42-68) — and, under one `sync.Mutex`,
-`lastRecords []engine.Record` plus `parseGen uint64`.
+Create one `internal/appservice.Service` and bind that pointer directly. It owns the Wails
+`context.Context` received by `OnStartup`, an initialized `atomic.Pointer[engine.RuleEngine]`, and,
+under one `sync.Mutex`, `lastRecords []engine.Record` plus `parseGen uint64`. Keep parsing,
+validation, and CSV helpers free of Wails `runtime.*`; only dialog/reveal adapter methods need the
+runtime context.
 
-**Why service-owned records, not an argument.** Fyne kept `csvData` in the window closure and both
-export buttons read it directly (gui.go:188, 473, 538); the exported file was always exactly the
-last parse, never a filtered or re-sorted view. Keeping that state in Go preserves the invariant and
-avoids shipping thousands of rows back across the bridge. Invariant: `Parse` is the only writer;
-export with empty `lastRecords` returns an error, and the frontend keeps the export buttons disabled
-until `status === 'ready'` (Fyne disabled them identically, gui.go:375, 379, 453-454).
+Every boundary DTO (`ScanResult`, `ParseResult`, `SkippedSource`, `SavedFile`,
+`ImportRulesResult`, `ValidationError`, `SandboxResult`) gets explicit JSON tags. Return empty
+arrays as `[]`, not `null`, and cover representative encoded payloads plus generated TS signatures.
 
-**Generation token (a mutex is not enough).** `Parse` runs off the UI path, so a `ClearParse()` — or
-a second `Parse` — can land while the first is still walking files; the mutex serializes the writes
-but does not stop the late one from resurrecting discarded records:
+**Why service-owned records, not a frontend argument.** Fyne kept `csvData` in the window closure
+and both export buttons read exactly the last parse (gui.go:188, 473, 538). Service ownership
+preserves that invariant and avoids sending the records back to Go for export. `Parse` is the only
+writer and never mutates a committed backing array, so exports take only the immutable slice header
+under the lock, release the lock, then perform I/O. An empty snapshot is an error. Never hold the
+state lock during parsing, dialogs, or disk I/O.
 
-1. `Parse` takes the lock, increments `parseGen`, copies the value into a local `gen`, releases.
-2. `ClearParse()` (and each new `Parse`) increments `parseGen` and nils `lastRecords`.
-3. On completion `Parse` re-takes the lock and commits `lastRecords` **only if** `parseGen == gen`;
-   otherwise it drops its result and emits nothing.
+**One completion channel, two stale-result guards.** Wails already dispatches each bound method on a
+Go goroutine and generates a Promise-returning frontend wrapper. `Parse` therefore does its work
+synchronously inside the bound method—do not launch another goroutine and do not duplicate Promise
+completion with `parse:done`/`parse:error` events.
 
-Same check gates `parse:done` / `parse:error` emission, so a superseded run cannot flip the
-frontend to `ready`. Cover it with a test: start a parse, `ClearParse()`, let the parse finish,
-assert `lastRecords` is empty and export errors.
+1. `Parse` locks, increments `parseGen`, clears `lastRecords`, copies the generation and engine
+   pointer, then unlocks.
+2. `ClearParse()` and every newer `Parse` increment `parseGen` and clear `lastRecords`.
+3. A completed parse commits only when its generation is still current; its `ParseResult` includes
+   `superseded: true` otherwise.
+4. The Pinia action also captures a frontend request epoch and ignores resolution/rejection after a
+   reset or newer request. This prevents stale UI state even when an old Promise settles last.
+
+Inject the source loader in service tests so the two concurrency cases are deterministic rather
+than timing-dependent.
 
 ### Parsing
 
-- [ ] `SelectFiles() ([]string, error)` → `runtime.OpenMultipleFilesDialog` (filters `*.msg;*.zip`).
-- [ ] `SelectFolder() (string, error)` → `runtime.OpenDirectoryDialog`.
-      **Parity note / bug fix**: Fyne used one zenity `SelectFile` labeled "Select file or folder"
-      with `*.msg;*.zip` filters, which cannot actually pick a folder on macOS. Two explicit
-      affordances are the minimum honest equivalent of the advertised behavior.
-- [ ] `ScanSource(path string) (ScanResult, error)` → wraps `scanner.FindSources`;
-      returns `{sources: []scanner.MessageSource, count: int, path: string}`.
-- [ ] `Parse(sources []scanner.MessageSource) (ParseResult, error)` → per-source
-      `scanner.LoadSource` + `eng.ParseRecords`; commits to `lastRecords` (sole writer, generation-
-      checked per above) and returns
-      `{records: []engine.Record, skipped: []SkippedSource{display_name, error}}`.
-- [ ] `ClearParse()` — bumps `parseGen` and nils `lastRecords` for the "Load New Source" reset
-      (gui.go:693 set `csvData = nil`), so a stale export cannot outlive the cleared preview.
-- [ ] Defensive copy of the source slice before handing it to a goroutine
-      (gui.go:426 pattern; also an open `improvements.md` item).
-- [ ] Run `Parse` off the UI path; emit `runtime.EventsEmit(ctx, "parse:done"|"parse:error")`.
-      Replaces the Fyne `go func` + `fyne.Do` dance (gui.go:421-458).
-      Progress events (`parse:progress`) are optional → Phase 13.
-- [ ] Surface `skipped` in the result. The Fyne version dropped per-file failures into
-      `log.Printf` (gui.go:77) where no user ever saw them; returning the list is the parity-safe fix.
+- [ ] `SelectFiles() ([]string, error)` → `runtime.OpenMultipleFilesDialog` with separate `*.msg`
+      and `*.zip` patterns. Cancel returns an empty slice and no error.
+- [ ] `SelectFolder() (string, error)` → `runtime.OpenDirectoryDialog`. Cancel returns `""` and no
+      error. This deliberately fixes Fyne's macOS picker, which advertised folders but could not
+      select one.
+- [ ] `ScanSources(paths []string) (ScanResult, error)` → call `scanner.FindSources` for every
+      selected/dropped path, preserve input and scanner order, and de-duplicate identical
+      `MessageSource` identities. Return
+      `{sources, count, source_paths}`; one bad root is an error rather than a partial scan.
+- [ ] `Parse(sources []scanner.MessageSource) (ParseResult, error)` → use the engine snapshot taken
+      at start; per source call `scanner.LoadSource` + `eng.ParseRecords`. Return
+      `{records, skipped: []SkippedSource{display_name,error}, superseded}` and commit records only
+      through the generation check above. A current result with zero records leaves
+      `lastRecords` empty; the frontend shows "No structured records found", keeps export disabled,
+      and does not treat an all-skipped run as success.
+- [ ] `ClearParse()` — bump `parseGen` and nil `lastRecords` for "Load New Source". Later export
+      requests fail; an export already initiated may finish from its immutable snapshot.
+- [ ] Do not defensively copy the bridge input or create a worker goroutine: JSON decoding already
+      gives each Wails call an owned slice, and Wails dispatches bound calls concurrently.
+      Progress/cancellation events remain Phase 13.
+- [ ] Surface `skipped` in the result. This deliberately improves on Fyne, which only logged
+      per-file failures (gui.go:77).
 
 ### Export
 
-- [ ] `SaveToDownloads() (SavedFile, error)` — writes `lastRecords` (headers + `ToRow`) to
-      `getDownloadsDir()` (port of gui.go:123-133) as `msg_parsed_<2006-01-02_150405>.csv`;
-      returns `{filename, dir, path}` so the frontend renders the "CSV Saved Automatically"
-      confirmation (gui.go:484-506).
-- [ ] `SaveAs() (SavedFile, error)` → `runtime.SaveFileDialog` (`DefaultFilename` =
-      `msg_parsed_<timestamp>.csv`, filter `*.csv`), then writes `lastRecords` to the chosen path.
-      Empty returned path = user cancelled, no error (replaces `errors.Is(err, zenity.ErrCanceled)`).
-- [ ] `RevealFile(path string) error` — port `revealFile` (gui.go:135-170): `open -R` (darwin),
-      `explorer.exe /select,` (windows), dbus `FileManager1.ShowItems` → `xdg-open` (linux).
-      Drop the Fyne `storage.NewFileURI` fallback; use `runtime.BrowserOpenURL(ctx, "file://"+dir)`.
-- [ ] CSV writing stays server-side (`encoding/csv`), rows from `engine.CSVHeaders` + `Record.ToRow`;
-      flush before checking errors (verify the copied `writeCSV` in `cmd/will-msg/main.go` has this fix).
+- [ ] `SaveToDownloads() (SavedFile, error)` — take an immutable `lastRecords` snapshot under the
+      lock, then write headers + `ToRow` to `getDownloadsDir()` as
+      `msg_parsed_<2006-01-02_150405>.csv`; return `{filename, dir, path, cancelled:false}`.
+- [ ] `SaveAs() (SavedFile, error)` → snapshot records before opening `runtime.SaveFileDialog`
+      (`DefaultFilename = msg_parsed_<timestamp>.csv`, filter `*.csv`). Return
+      `{cancelled:true}` for an empty dialog path; cancellation is not an error and writes nothing.
+- [ ] `RevealFile(path string) error` — isolate platform commands behind small per-OS helpers:
+      `open -R` (darwin), `explorer.exe /select,` (windows), FileManager1 → `xdg-open` (linux).
+      Use `exec.CommandContext` argument vectors, never a shell. Build fallback file URLs with
+      `url.URL{Scheme:"file", Path:dir}.String()` so spaces and `#` are escaped correctly.
+- [ ] CSV writing stays server-side (`encoding/csv`), rows come only from `engine.CSVHeaders` +
+      `Record.ToRow`, and writer flush and file-close errors are both returned. Keep the copied CLI
+      writer unchanged and prove service output equivalent in Phase 9.
 
 ### Rules (replaces `internal/gui/gui_rules.go`, 915 lines)
 
-- [ ] `GetRules() config.RuleConfig` — `config.LoadConfig()`.
-- [ ] `GetDefaultRules() config.RuleConfig` — `config.DefaultRuleConfig()` (for "Reset Defaults").
-- [ ] `ValidateRules(cfg config.RuleConfig) []ValidationError` — wraps `cfg.Validate()` +
-      `config.CompileRegexPattern` per regex rule; return per-rule errors, not one opaque string.
-- [ ] `SaveRules(cfg config.RuleConfig) error` — `engine.NewRuleEngineValidated` → `config.SaveConfig`
-      → swap the atomic engine pointer → emit `"rules:applied"`.
-- [ ] `SaveRulesToPath(path string, cfg) error` / `LoadRulesFromPath(path string)` — keeps the
-      custom-config-path feature from commit `52182f1`.
-- [ ] `ImportRules() (config.RuleConfig, error)` → `OpenFileDialog` (`*.json`) + `config.ParseRuleConfig`
-      (which also runs `MigrateConfig`).
-- [ ] `ExportRules(cfg config.RuleConfig) (string, error)` → `SaveFileDialog` + `cfg.ToJSON()`.
-- [ ] `TestRule(input string, cfg config.RuleConfig) SandboxResult` — port `runSandbox`
-      (gui_rules.go:403): build a temp engine, return
-      `{address, status, issue_time, label, matched_rule_index, matched_rule_id, match_kind:
-    "rule"|"heuristic"|"fallback", metric}` from `Classify` + `MatchRule` + `MetricForLabel`.
-- [ ] Rule list mutations (add/edit/delete/move up/move down/toggle) stay **client-side** on the
-      working config; only `ValidateRules`/`SaveRules`/`TestRule` cross the bridge. Precedence =
-      array order; first enabled match wins — preserve order exactly.
-- [ ] Label CRUD: inline label creation (`[+ Add New Label...]`, gui_rules.go:560) needs key
-      validation (snake_case, unique) + `metric ∈ {none, trash, recycling, both}`.
+- [ ] `GetRules() config.RuleConfig` — return `config.LoadConfig()`; it already returns a fresh
+      decoded/default value, so another Go-side clone is unnecessary.
+- [ ] `GetDefaultRules() config.RuleConfig` — return a fresh `config.DefaultRuleConfig()`.
+- [ ] `ValidateRules(cfg config.RuleConfig) []ValidationError` — authoritative validation for all
+      config invariants and every regex; return stable `{path, message}` entries. `SaveRules` and
+      `TestRule` call the same helper so frontend feedback cannot drift from save behavior.
+- [ ] `SaveRules(cfg config.RuleConfig) error` — validate/build with
+      `engine.NewRuleEngineValidated`, persist via `config.SaveConfig`, then atomically swap the
+      engine. The Promise is the completion signal; no `rules:applied` event.
+- [ ] Keep `LoadConfigFromPath`/`SaveConfigToPath` for dependency injection and existing tests, but
+      do not bind arbitrary-path methods: `NewRuleManagerViewWithPath` is test plumbing, not a
+      user-visible Fyne feature.
+- [ ] `ImportRules() (ImportRulesResult, error)` → `OpenFileDialog` (`*.json`) +
+      `config.ParseRuleConfig`; return `{cancelled:true}` on cancel or `{config,cancelled:false}`.
+      Import changes only the working copy and never saves implicitly.
+- [ ] `ExportRules(cfg config.RuleConfig) (SavedFile, error)` → validate, `SaveFileDialog`, and
+      `cfg.ToJSON()`; use the same explicit cancellation contract as `SaveAs`.
+- [ ] `TestRule(input string, cfg config.RuleConfig) (SandboxResult, error)` — validate/build a
+      temporary engine, then return
+      `{address,status,issue_time,label,matched_rule_index,matched_rule_id,match_kind,metric}` from
+      `Classify`, `MatchRule(issue)`, and `MetricForLabel`. Invalid in-progress regex input returns a
+      validation error instead of silently skipping the rule.
+- [ ] Rule mutations (add/edit/delete/move/toggle/reset) stay client-side. Preserve array order and
+      stable IDs exactly; first enabled match wins. Never sort the saved rules for display.
+- [ ] Preserve the existing label-key contract: non-empty and unique, with
+      `metric ∈ {none,trash,recycling,both}`. Do **not** impose snake_case during migration because
+      existing valid configs may contain other keys. Inline creation may update an existing key,
+      matching the Fyne form.
 
 ### Wiring
 
-- [ ] `main.go`: `//go:embed all:frontend/dist`, `wails.Run(&options.App{...})` with
-      `Title: "Outlook MSG to CSV Parser"`, `Width: 950`, `Height: 700` (Fyne's size),
-      `MinWidth`/`MinHeight`, `BackgroundColour` = slate-50 `#F8FAFC`,
-      `Bind: []any{app, rulesSvc}`, `OnStartup`, `OnShutdown`.
-- [ ] `DragAndDrop: &options.DragAndDrop{EnableFileDrop: true, CSSDropProperty: "--wails-drop-target", CSSDropValue: "drop"}`
-      and `runtime.OnFileDrop(ctx, func(x, y int, paths []string))` → replaces `w.SetOnDropped`
-      (gui.go:412-419). Fyne consumed only `uris[0]`; matching that is fine, accepting the slice is free.
+- [ ] `main.go`: keep `//go:embed all:frontend/dist` and `assetserver.Options{Assets: assets}`; use
+      `Title: "Outlook MSG to CSV Parser"`, `Width: 950`, `Height: 700`, explicit minimums,
+      `BackgroundColour: options.NewRGB(248,250,252)`, `Bind: []any{svc}`, and `OnStartup`.
+- [ ] Enable `options.DragAndDrop{EnableFileDrop:true,...}`. Register
+      `OnFileDrop(callback, true)` in Vue from `frontend/wailsjs/runtime`, call `ScanSources(paths)`,
+      and unregister with `OnFileDropOff` on unmount. Do not also register Go
+      `runtime.OnFileDrop`; two listeners create duplicate scans.
 
 ---
 
 ## 4. Frontend scaffold
 
 - [ ] `cd frontend && bun install`
-- [ ] `bun add -d tailwindcss @tailwindcss/vite` ; `bun add pinia`
+- [ ] `bun add pinia`; `bun add -d tailwindcss @tailwindcss/vite`
 - [ ] `vite.config.ts`: `plugins: [vue(), tailwindcss()]`, `@` alias → `src`.
 - [ ] `src/style.css`: `@import "tailwindcss";` + `@theme` tokens (Phase 5).
-- [ ] `tsconfig`: `strict: true`; path alias for the generated `wailsjs` bindings.
-- [ ] Scripts in `frontend/package.json`: `dev`, `build` (`vue-tsc --noEmit && vite build`).
-- [ ] Delete scaffold demo files (`Greet` component, logo assets, boilerplate CSS).
-- [ ] Confirm bindings generate into `frontend/wailsjs/go/...`; decide committed vs gitignored and be consistent.
+- [ ] `tsconfig`: `strict: true`; path alias for generated `wailsjs` bindings.
+- [ ] Keep scripts `dev` and `build` (`vue-tsc --noEmit && vite build`); add `test: "bun test"`.
+- [ ] Delete scaffold demo files (Greet component, logo assets, boilerplate CSS).
+- [ ] Commit generated `frontend/wailsjs/` bindings as the checked-in Go/TS API contract. After
+      service changes, run `wails generate module` and require a clean regeneration before cutover;
+      never hand-edit generated files.
 
 ---
 
@@ -213,10 +240,12 @@ Exact colors from `customTheme` (gui.go:92-121) → Tailwind v4 `@theme` tokens:
 | selection overlay                    | `#6CB944` @ 31% | `ColorNameSelection` (alpha 80/255)            |
 
 - [ ] Light/dark via `prefers-color-scheme` + `dark:` variants (Fyne branched on
-      `theme.VariantDark` in 4 places).
+      `theme.VariantDark` in 4 places). Honor `prefers-reduced-motion` for all nonessential motion.
 - [ ] Copy `internal/gui/truck.png` → `frontend/src/assets/truck.png`; it becomes a frontend asset,
       so delete the Go `//go:embed truck.png` + `truckResource`.
-- [ ] Generate `build/appicon.png` (1024×1024) from `truck.png`.
+- [ ] The source truck icon is 512×512. Generate the required 1024×1024 `build/appicon.png`
+      deliberately, inspect the packaged icon at native sizes, and keep a higher-resolution redraw
+      as Phase 13 polish rather than blocking migration.
 - [ ] Type scale: Fyne header sizes were 18 px (title), 13 px (subtitle), 28 px (welcome headline);
       use tabular numerals in the CSV table.
 
@@ -224,17 +253,19 @@ Exact colors from `customTheme` (gui.go:92-121) → Tailwind v4 `@theme` tokens:
 
 ## 6. Frontend architecture
 
-- [ ] `src/stores/parse.ts` — `sourcePath`, `sources[]`, `records[]`, `skipped[]`,
-      `status: idle|scanning|parsing|ready|error`.
-      Replaces the Fyne closure state `currentSources`, `displayNames`, `csvData` (gui.go:186-189).
-- [ ] `src/stores/rules.ts` — `savedConfig`, `workingConfig`, `selectedIndex`, `isDirty`,
-      `validation[]`; mutations for add/edit/delete/move/toggle/reset.
-- [ ] `src/composables/useWailsEvents.ts` — typed `EventsOn` wrappers for `parse:done`,
-      `parse:error`, `rules:applied`, file drop.
+- [ ] `src/stores/parse.ts` — `sourcePaths`, `sources[]`, `records[]`, `skipped[]`,
+      `requestEpoch`, and `status: idle|scanning|parsing|ready|error`. Every scan/parse/reset action
+      owns its state transition; stale Promise results must fail the epoch check before mutation.
+- [ ] `src/stores/rules.ts` — `savedConfig`, deep-cloned `workingConfig`, `selectedIndex`,
+      `isDirty`, `validation[]`; mutations for add/edit/delete/move/toggle/reset/import. Never alias
+      the Wails-generated model arrays between saved and working state.
+- [ ] `src/composables/useFileDrop.ts` — register the Wails runtime `OnFileDrop` listener once,
+      route all paths through the parse store's `ScanSources` action, and clean it up on unmount.
 - [ ] `src/lib/toast.ts` — replaces `dialog.ShowError` / `dialog.ShowInformation`
       (≈12 call sites across gui.go / gui_rules.go).
 - [ ] Screen switching: `bodyContainer` + `showWelcome()`/`showWorkspace()` (gui.go:740-748)
-      becomes a `view` computed; the rules manager is a third view (Fyne used a second window).
+      becomes a `view` computed; the rules manager is the third view. Route all exits from a dirty
+      rules view through one discard-confirmation guard.
 
 ---
 
@@ -244,12 +275,9 @@ Exact colors from `customTheme` (gui.go:92-121) → Tailwind v4 `@theme` tokens:
 
 - [ ] `AppHeader.vue` — 50 px truck-green bar: truck logo, "Outlook MSG Parser",
       subtitle "Feed me your msg files, Will", "Rules & Labels" button (gui.go:584-616).
-- [ ] `StatusBar.vue` — 30 px slate-800 strip with the Pac-Man animation (gui.go:195-298:
-      raster Pac-Man, 40 dots at 50 px spacing, 30 ms ticker, mouth `|sin(t)|*0.8`, 1.4 px/frame,
-      wraps at the right edge) as CSS keyframes or a small `<canvas>`.
-      Fyne ran it continuously (stopping only on window close, and only after the fix in
-      `improvements.md`); gate it on `status === 'parsing'` or keep it always-on — your call, it is
-      pure decoration either way.
+- [ ] `StatusBar.vue` — 30 px slate-800 strip with a CSS Pac-Man/dot animation derived from
+      gui.go:195-298. Run it only while `status === 'parsing'`, and render a static strip under
+      `prefers-reduced-motion: reduce`; no canvas ticker or component-owned timer.
 - [ ] `ToastHost.vue`, `ConfirmDialog.vue`, `Modal.vue` primitives.
 
 ### Welcome screen (gui.go:618-688)
@@ -257,16 +285,17 @@ Exact colors from `customTheme` (gui.go:92-121) → Tailwind v4 `@theme` tokens:
 - [ ] `WelcomeScreen.vue` — rounded (16 px) drop zone, truck-green 2 px stroke, light-green tint,
       upload icon, headline "Feed me your msg files, Will", copy
       "Drop or select. Accepts .msg files, folders containing .msg files, or .zip archives."
-- [ ] Drop-target highlight via the `wails-drop-target-active` class from `OnFileDrop(cb, true)`.
+- [ ] Mark the drop zone with `style="--wails-drop-target: drop"` and style the
+      `wails-drop-target-active` class installed by `OnFileDrop(callback, true)`.
 - [ ] Buttons: **Choose files…** (`SelectFiles`) and **Choose folder…** (`SelectFolder`).
 - [ ] Empty-scan feedback — Fyne showed a modal "No .msg files were found in the selected source."
       (gui.go:408); a toast or inline warning is equivalent.
 
 ### Workspace (gui.go:690-738)
 
-- [ ] `SourcePanel.vue` — "Load New Source" reset (clears sources/records/preview, gui.go:690-702),
-      selected path (word-wrapped), "Found N .msg files" (italic), scrollable detected-file list
-      with document icon + ellipsis truncation (gui.go:306-327).
+- [ ] `SourcePanel.vue` — "Load New Source" calls the store reset and `ClearParse`, then clears
+      sources/records/preview; render all selected root paths, "Found N .msg files" (italic), and a
+      scrollable detected-file list with document icon + ellipsis truncation.
 - [ ] `RunParserButton.vue` — disabled until sources exist; disables Run/Download/Save-As while
       parsing, re-enables on completion or error (gui.go:421-456).
 - [ ] `CsvPreview.vue` — table, 11 columns, sticky bold header row
@@ -292,7 +321,7 @@ Exact colors from `customTheme` (gui.go:92-121) → Tailwind v4 `@theme` tokens:
       "Default label" select (`DefaultLabel`), rule-count label.
 - [ ] `RuleFormModal.vue` (gui_rules.go:560) — Pattern, Match Type (`substring`/`regex`),
       Target Label select including `[+ Add New Label…]`, Description, Enabled toggle.
-      Validation: non-empty pattern, regex compiles, new-label key snake_case + unique + metric chosen.
+      Validation: non-empty pattern, compilable regex, non-empty unique label key, and valid metric.
 - [ ] `RuleSandbox.vue` (gui_rules.go:347-464) — debounced live input (default sample
       `45 FOREST ST TRASH AND RCY NOT OUT 0830AM`), 4 sample buttons
       (Both Not Out / Contaminated / Blocked / Heuristic Suffix) + Clear, and 6 result cards:
@@ -305,64 +334,84 @@ Exact colors from `customTheme` (gui.go:92-121) → Tailwind v4 `@theme` tokens:
 
 ## 8. Native integration checks
 
-- [ ] File drop of a folder, a `.msg`, a `.zip`, and multiple files each reach `ScanSource`.
-- [ ] Cancelled dialogs return empty/nil and produce no error toast.
-- [ ] `RevealFile` verified on macOS; Windows/Linux branches compile and are smoke-tested where available.
-- [ ] Paths with spaces and parentheses work (real fixtures: `MEDFORD TAGS 04_16_26 (1).msg`).
-- [ ] Windows: WebView2 runtime — either document the prerequisite or build with `-webview2 embed`.
-- [ ] The built `.app` works **outside** the repo directory (Fyne had an asset-path bug fixed by
-      `//go:embed`; confirm `frontend/dist` is embedded, not read from disk).
+- [ ] File drop of a folder, a `.msg`, a `.zip`, and multiple files each call `ScanSources` once;
+      overlapping roots do not duplicate detected messages.
+- [ ] Cancelled dialogs return their explicit `cancelled` result and produce no error toast or
+      state mutation.
+- [ ] `RevealFile` verified on macOS. Exercise the Windows branch on a Windows runner and the Linux
+      branch when a Linux artifact is added; a host-only Go test does not compile other build tags.
+- [ ] Paths with spaces, parentheses, `#`, and non-ASCII characters work.
+- [ ] Windows build uses `-webview2 embed`; smoke-run it on Windows with WebView2 absent or document
+      the exact fallback/install behavior observed.
+- [ ] The built `.app` works **outside** the repo directory; confirm `frontend/dist` is embedded and
+      no runtime asset lookup depends on the working directory.
 
 ---
 
 ## 9. Verification
 
-- [ ] `go test ./...` green (core tests unchanged).
-- [ ] **Golden CSV equivalence — the gate that blocks cutover.** Run the old Fyne binary and the new
-      app over `testdata/` and `data/`; `cmp` the CSVs byte-for-byte (ignoring the timestamped
-      filename). Any diff is a migration bug.
-- [ ] Go service tests replacing `internal/gui/gui_rules_test.go` (369 lines) coverage:
-      reorder precedence, toggle enabled, sandbox result for each built-in sample, invalid-regex
-      rejection, reset-to-defaults, import/export round-trip, save→engine-swap.
-- [ ] Parse-lifecycle tests: `Parse` populates `lastRecords`; `ClearParse()` mid-parse leaves it
-      empty after the parse returns (generation check) and export then errors; a second `Parse`
-      supersedes the first, and the superseded run emits no `parse:done`.
-- [ ] Delete `internal/gui/gui_test.go` (47 lines — asserts the embedded `truck.png` bytes and Fyne
-      resource wiring; the asset moved to the frontend). Re-home its `parseMsgSources` coverage as a
-      `Parse` service test.
-- [ ] `rules.json` written by the new app is byte-compatible with the Fyne app's file
-      (same path, same schema, `version: 1`); load an existing user file unchanged.
-- [ ] Manual smoke run (`wails dev`): drop folder → scan → run → preview → Download CSV →
-      Show in Folder; then edit a rule → sandbox → Save & Apply → re-run → labels change.
+- [ ] `go test ./...` and `go test -race ./internal/appservice` green.
+- [ ] **Golden CSV equivalence — cutover gate.** Run both old and new `cmd/will-msg` over
+      `testdata/` and `data/` with the same rules config and compare CSV bytes. Separately exercise
+      the service parse/export helper against `testdata/msg_parsed.csv`; this proves the GUI path,
+      not only the copied CLI.
+- [ ] Go service tests cover: boundary DTO encoding, sandbox result for every built-in sample,
+      invalid-regex rejection, import/export round-trip and cancellation,
+      save→persist→engine-swap ordering, no-record/all-skipped parsing, empty export, and CSV
+      writer/close failures. Inject dialog and filesystem edges; do not require a live Wails runtime.
+- [ ] Deterministic parse-lifecycle tests cover: successful commit; `ClearParse()` during parse;
+      second parse superseding the first; `superseded:true`; and export remaining empty after a
+      superseded completion.
+- [ ] `bun test` covers observable store behavior: deep-clone isolation, reorder precedence,
+      toggle, boundary moves, reset/import dirty state, and stale parse Promise suppression. Use
+      Bun's test runner; do not add Vitest solely for these store tests.
+- [ ] Do not copy `internal/gui/*_test.go`. Re-home only behavior that survives the boundary:
+      `parseMsgSources` into service tests and rule mutations into store tests; drop asset/resource
+      wiring assertions.
+- [ ] `rules.json` from the new app round-trips an existing user file without schema or key changes
+      (same path and `version:1`), including a valid non-snake-case custom label key.
+- [ ] Run `wails generate module`, inspect the generated TS field names/signatures, then
+      `cd frontend && bun run build`.
+- [ ] Manual smoke (`wails dev`): drop multiple roots → scan once → run → preview → Download CSV →
+      Show in Folder; reset during an active parse and verify no stale preview/export; then import,
+      edit, sandbox, Save & Apply, re-run, and observe changed labels.
 
 ---
 
 ## 10. Build & packaging (replaces fyne-cross)
 
-Parity target = the same artifact set the Fyne build produced.
+Parity target = the same artifact set the Fyne build produced. Build on the target OS; do not make a
+macOS cross-compile the only evidence for a Windows release.
 
-- [ ] `wails build -platform darwin/arm64 -clean` → `bin/will-msg-macos-arm64.app` (+ zip).
-- [ ] `wails build -platform darwin/amd64 -clean` → `bin/will-msg-macos-amd64.app` (+ zip).
-- [ ] `wails build -platform windows/amd64 -clean` → `bin/will-msg-windows-amd64.exe` (+ zip).
-- [ ] Rewrite `wails-version/will-msg/mise.toml` tasks: `dev` (`wails dev`), `build`,
-      `build-darwin`, `build-windows`, `test`, and keep the existing `parse`
-      (`go run ./cmd/msgcat`) helper. Delete `scripts/build-darwin.sh` (fyne-cross specific).
-- [ ] Drop the Docker prerequisite (fyne-cross needed it; Wails does not for these targets).
-- [ ] macOS `Info.plist`: product name/version, bundle ID `io.github.dustinmichels.willmsg`.
-- [ ] `.gitignore`: add `frontend/node_modules/`, `frontend/dist/`, `build/bin/`;
-      keep the existing `data*/`, `output/`, `sample/`, `bin/` entries.
+- [ ] On macOS, build both architectures in one invocation so Wails assigns distinct bundle names:
+      `wails build -platform darwin/arm64,darwin/amd64 -clean`. Package/rename the resulting apps as
+      `bin/will-msg-macos-{arm64,amd64}.app` and zip each with `ditto -c -k --sequesterRsrc
+--keepParent`.
+- [ ] On a native Windows CI runner:
+      `wails build -platform windows/amd64 -clean -webview2 embed`; package
+      `bin/will-msg-windows-amd64.exe` and its zip there, then launch the exe for a smoke check.
+- [ ] Rewrite `mise.toml` tasks: `dev`, `build`, `build-darwin`, `build-windows`, `test`, and the
+      existing `parse` helper. Make each packaging task produce the filenames above and fail if an
+      expected artifact is absent. Delete the Fyne-specific `scripts/build-darwin.sh`.
+- [ ] Add a native-OS CI matrix (macOS for Darwin, Windows for Windows); upload the three parity
+      artifacts. Docker/fyne-cross is no longer required once the native jobs are green.
+- [ ] Verify generated metadata, not just source templates: both macOS bundles have
+      `CFBundleIdentifier=io.github.dustinmichels.willmsg`, short version `1.0.0`, build `35`, and
+      the expected executable architecture; inspect Windows version resources too.
+- [x] `.gitignore` covers `node_modules/`, `frontend/dist/`, `build/bin/`, local data/output/sample,
+      and packaged `bin/`.
 
 ---
 
 ## 11. Docs
 
-- [ ] Rewrite `README.md`: new stack, `wails dev` / `wails build`, bun commands, prerequisites
-      (Go, bun, Wails CLI, WebView2 on Windows). Delete the Fyne/CGo/OpenGL/fyne-cross/Docker section.
+- [ ] Rewrite `README.md`: new stack, `wails dev` / `wails build`, bun commands, prerequisites,
+      generated-binding workflow, native-OS packaging, and embedded WebView2 behavior. Delete the
+      Fyne/CGo/OpenGL/fyne-cross/Docker section.
 - [ ] Keep the `msgcat` and CLI (`-input`/`-output`) sections — those binaries survive unchanged.
-- [ ] Rewrite `claude.md` for the new layout (Go services + Vue frontend, bun, where bindings live).
-- [ ] Prune `improvements.md`: items already implemented (embed assets, log mutex, defensive copy,
-      engine validation, parser/GUI/scanner decoupling) and items this migration obsoletes
-      (Pac-Man raster CPU, Fyne raster border on high-DPI, Save-As feedback). Carry forward the rest.
+- [ ] Rewrite `claude.md` for the new layout (Go service + Vue frontend, bun, bindings ownership).
+- [ ] Prune `improvements.md`: remove completed or obsolete Fyne items, but retain still-open work;
+      do not describe this migration itself as future work after cutover.
 
 ---
 
@@ -370,62 +419,65 @@ Parity target = the same artifact set the Fyne build produced.
 
 - [ ] Feature-parity walkthrough against the matrix below; every row checked.
 - [ ] Verify nothing Fyne-shaped was copied in: no `internal/gui/`, `cmd/will-msg-gui/`,
-      `FyneApp.toml`, `fyne-cross/`, `Icon.png`, root `truck.png`.
-- [ ] Delete `fyne-version/` (or park it on a `legacy-fyne` tag/branch) so there is one source of truth.
-- [ ] Decide whether `wails-version/will-msg` gets promoted to the repo root layout.
-- [ ] Final `go mod tidy`, `bun install --frozen-lockfile`, full build on macOS (+ Windows if available).
+      `FyneApp.toml`, `fyne-cross/`, `Icon.png`, or root `truck.png`.
+- [ ] Tag the final Fyne state `legacy-fyne`, promote `wails-version/will-msg/` to the repository
+      root, and remove the two versioned directories so one source of truth remains.
+- [ ] From the promoted clean checkout: `go mod tidy` (no diff) →
+      `bun install --frozen-lockfile` → regenerate bindings (no diff) → Go/Bun tests → native
+      macOS and Windows builds/smokes.
 
 ---
 
 ## Feature parity matrix (Fyne → Wails)
 
-| Fyne feature (source)                                   | Wails/Vue replacement                       | Done |
-| ------------------------------------------------------- | ------------------------------------------- | ---- |
-| Window "Outlook MSG to CSV Parser" 950×700 (gui.go:178) | `options.App{Title, Width, Height}`         | ☐    |
-| Custom truck-green theme, light/dark (gui.go:92-121)    | Tailwind `@theme` tokens                    | ☐    |
-| Drop files onto window (gui.go:412)                     | `EnableFileDrop` + `runtime.OnFileDrop`     | ☐    |
-| zenity "Select file or folder" (gui.go:631)             | `SelectFiles` + `SelectFolder`              | ☐    |
-| `scanner.FindSources` + count labels (gui.go:386-410)   | `ScanSource` + `SourcePanel.vue`            | ☐    |
-| Detected-files list (gui.go:306)                        | list in `SourcePanel.vue`                   | ☐    |
-| Run Parser + background goroutine (gui.go:421)          | `Parse` + `parse:done`/`parse:error` events | ☐    |
-| Per-file failures logged only (gui.go:77)               | `ParseResult.skipped` + notice              | ☐    |
-| CSV preview table, 11 cols (gui.go:329-367)             | `CsvPreview.vue`                            | ☐    |
-| Download CSV → ~/Downloads (gui.go:460)                 | `SaveToDownloads`                           | ☐    |
-| Save As… via zenity (gui.go:509)                        | `SaveAs` → `runtime.SaveFileDialog`         | ☐    |
-| Saved-file confirmation dialog (gui.go:484-506)         | confirmation card                           | ☐    |
-| "Show in Folder" (gui.go:135-170)                       | `RevealFile`                                | ☐    |
-| Pac-Man status bar animation (gui.go:195-298)           | CSS/canvas `StatusBar.vue`                  | ☐    |
-| "Load New Source" reset (gui.go:690)                    | store reset action                          | ☐    |
-| Rules & Labels window (gui_rules.go:51)                 | `RulesView.vue`                             | ☐    |
-| Rules table + toolbar (gui_rules.go:147-328)            | `RulesTable.vue` + toolbar                  | ☐    |
-| Heuristics toggle + default label (gui_rules.go:214)    | settings bar                                | ☐    |
-| Add/Edit rule dialog (gui_rules.go:560)                 | `RuleFormModal.vue`                         | ☐    |
-| Inline new-label creation (gui_rules.go:560)            | label sub-form + validation                 | ☐    |
-| Live sandbox (gui_rules.go:347-464)                     | `RuleSandbox.vue` + `TestRule`              | ☐    |
-| Import/Export rules JSON (gui_rules.go:777-881)         | `ImportRules` / `ExportRules`               | ☐    |
-| Reset defaults (gui_rules.go:487)                       | `GetDefaultRules` + confirm                 | ☐    |
-| Save & Apply rules (gui_rules.go:737-775)               | `SaveRules` + engine swap                   | ☐    |
-| Custom config path (commit 52182f1)                     | `Load/SaveRulesToPath`                      | ☐    |
-| `dialog.ShowError` / `ShowInformation`                  | toast host                                  | ☐    |
-| `cmd/will-msg`, `cmd/msgcat`                            | copied unchanged                            | ☐    |
+| Fyne feature (source)                                   | Wails/Vue replacement                   | Done |
+| ------------------------------------------------------- | --------------------------------------- | ---- |
+| Window "Outlook MSG to CSV Parser" 950×700 (gui.go:178) | `options.App{Title, Width, Height}`     | ☐    |
+| Custom truck-green theme, light/dark (gui.go:92-121)    | Tailwind `@theme` tokens                | ☐    |
+| Drop files onto window (gui.go:412)                     | `EnableFileDrop` + JS `OnFileDrop`      | ☐    |
+| zenity "Select file or folder" (gui.go:631)             | `SelectFiles` + `SelectFolder`          | ☐    |
+| `scanner.FindSources` + count labels (gui.go:386-410)   | `ScanSources` + `SourcePanel.vue`       | ☐    |
+| Detected-files list (gui.go:306)                        | list in `SourcePanel.vue`               | ☐    |
+| Run Parser + background goroutine (gui.go:421)          | concurrent bound `Parse` Promise        | ☐    |
+| Per-file failures logged only (gui.go:77)               | `ParseResult.skipped` + notice          | ☐    |
+| CSV preview table, 11 cols (gui.go:329-367)             | `CsvPreview.vue`                        | ☐    |
+| Download CSV → ~/Downloads (gui.go:460)                 | `SaveToDownloads`                       | ☐    |
+| Save As… via zenity (gui.go:509)                        | `SaveAs` → `runtime.SaveFileDialog`     | ☐    |
+| Saved-file confirmation dialog (gui.go:484-506)         | confirmation card                       | ☐    |
+| "Show in Folder" (gui.go:135-170)                       | `RevealFile`                            | ☐    |
+| Pac-Man status bar animation (gui.go:195-298)           | reduced-motion-safe CSS `StatusBar.vue` | ☐    |
+| "Load New Source" reset (gui.go:690)                    | store reset + `ClearParse`              | ☐    |
+| Rules & Labels window (gui_rules.go:51)                 | `RulesView.vue`                         | ☐    |
+| Rules table + toolbar (gui_rules.go:147-328)            | `RulesTable.vue` + toolbar              | ☐    |
+| Heuristics toggle + default label (gui_rules.go:214)    | settings bar                            | ☐    |
+| Add/Edit rule dialog (gui_rules.go:560)                 | `RuleFormModal.vue`                     | ☐    |
+| Inline new-label creation (gui_rules.go:560)            | label sub-form + compatible validation  | ☐    |
+| Live sandbox (gui_rules.go:347-464)                     | `RuleSandbox.vue` + `TestRule`          | ☐    |
+| Import/Export rules JSON (gui_rules.go:777-881)         | `ImportRules` / `ExportRules`           | ☐    |
+| Reset defaults (gui_rules.go:487)                       | `GetDefaultRules` + confirm             | ☐    |
+| Save & Apply rules (gui_rules.go:737-775)               | `SaveRules` + engine swap               | ☐    |
+| `dialog.ShowError` / `ShowInformation`                  | toast host                              | ☐    |
+| `cmd/will-msg`, `cmd/msgcat`                            | copied unchanged                        | ☐    |
 
 ---
 
 ## Risks / watch items
 
-- **Binding field names.** `engine.Record` and `scanner.MessageSource` have no JSON tags; without
-  the Phase 2 tagging step the TS bindings use Go field names and the frontend silently diverges
-  from the CSV contract. Tag before writing components.
-- **Rule precedence is array order.** Any frontend transform (sort, filter, `map` over a copy) must
-  not reorder `cfg.Rules` before `SaveRules`.
-- **Config compatibility.** Do not touch `config.*` struct tags, `ConfigDirName`, `ConfigFileName`,
-  or `CurrentConfigVersion`.
-- **Preview scale.** `data-new/` holds ~200 `.msg` files; Fyne's table recycled cells, a DOM table
-  does not. Measure before reaching for a virtualization library.
-- **`RevealFile` platform branches** and zip-internal source paths (`MessageSource.InZip`) are the
-  least-tested code paths in the port.
-- **Wails v3 beta** exists and changes bindings/build significantly. Keep the Phase 3 service layer
-  free of `runtime.*` calls where practical so a later v3 move is mechanical.
+- **Binding field names.** `engine.Record` and `scanner.MessageSource` need explicit JSON tags;
+  regenerate bindings and inspect the generated TS instead of trusting Go compile success.
+- **Bound calls are concurrent.** `Parse`, `ClearParse`, export, and `SaveRules` can overlap. Keep
+  locks narrow, snapshot the engine/records, and enforce both backend generation and frontend epoch
+  checks. Never hold a mutex across a Wails dialog or filesystem operation.
+- **Rule precedence is array order.** Display filtering/sorting must not mutate `workingConfig.Rules`
+  or reorder the payload passed to `SaveRules`.
+- **Config compatibility.** Do not change `config.*` JSON tags, config path constants, version, or
+  accepted label-key syntax during migration.
+- **Preview scale.** `data-new/` holds ~200 `.msg` files; measure a production build before adding
+  table virtualization.
+- **Platform boundaries.** Reveal-file helpers, WebView2 bootstrap behavior, generated bundle
+  metadata, and zip-internal sources require target-OS or fixture-backed checks.
+- **Wails v3 beta** changes bindings/build significantly. Keep core service logic free of
+  `runtime.*` so a later v3 migration remains mechanical.
 
 ---
 
@@ -442,12 +494,13 @@ Do none of these before Phase 12 is green. Each adds scope or a dependency the F
       row detail drawer (`raw_entry` vs parsed fields).
 - [ ] **File list affordances**: search/filter, per-file parsed-row count, zip badge for `InZip`.
 - [ ] **Parse progress events + cancellation** (`parse:progress`, `Cancel()`); the Fyne app had neither.
+- [ ] **Stricter label-key normalization** (for example snake_case), with an explicit config
+      migration and UI explanation; never reject existing keys silently.
 - [ ] **Drag-to-reorder rules** replacing Move Up/Down (keep a keyboard-accessible fallback).
 - [ ] **Sandbox extras**: highlight the matching rule row, show the regex capture span.
 - [ ] **macOS universal binary** (`-platform darwin/universal`) instead of two per-arch bundles.
 - [ ] **Windows NSIS installer** (`-nsis`) in addition to the zip.
 - [ ] **Code signing / notarization** for distribution outside the org.
 - [ ] **`vue-router`** if the three views outgrow a `view` computed.
-- [ ] **Frontend test tooling** (Vitest for store/table logic, Playwright E2E) — Phase 9's Go tests +
-      golden CSV + manual smoke are the parity bar.
+- [ ] **Frontend E2E tooling** (Playwright) or Vitest if component behavior outgrows Bun tests.
 - [ ] **`SingleInstanceLock`** app option.
