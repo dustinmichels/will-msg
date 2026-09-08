@@ -1,36 +1,36 @@
 <script setup lang="ts">
-import { onMounted, onUnmounted } from 'vue'
+import { onMounted, onUnmounted } from "vue";
 
 const props = withDefaults(
   defineProps<{
-    isOpen: boolean
-    title?: string
-    maxWidthClass?: string
+    isOpen: boolean;
+    title?: string;
+    maxWidthClass?: string;
   }>(),
   {
     isOpen: false,
-    title: '',
-    maxWidthClass: 'max-w-lg',
-  }
-)
+    title: "",
+    maxWidthClass: "max-w-lg",
+  },
+);
 
 const emit = defineEmits<{
-  (e: 'close'): void
-}>()
+  (e: "close"): void;
+}>();
 
 function onKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape' && props.isOpen) {
-    emit('close')
+  if (e.key === "Escape" && props.isOpen) {
+    emit("close");
   }
 }
 
 onMounted(() => {
-  window.addEventListener('keydown', onKeydown)
-})
+  window.addEventListener("keydown", onKeydown);
+});
 
 onUnmounted(() => {
-  window.removeEventListener('keydown', onKeydown)
-})
+  window.removeEventListener("keydown", onKeydown);
+});
 </script>
 
 <template>
@@ -47,7 +47,10 @@ onUnmounted(() => {
         :class="maxWidthClass"
       >
         <!-- Header -->
-        <div v-if="title || $slots.header" class="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-700">
+        <div
+          v-if="title || $slots.header"
+          class="flex items-center justify-between px-6 py-4 border-b border-slate-200 dark:border-slate-700"
+        >
           <slot name="header">
             <h3 class="text-lg font-semibold tracking-tight">{{ title }}</h3>
           </slot>
@@ -58,7 +61,12 @@ onUnmounted(() => {
             aria-label="Close dialog"
           >
             <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M6 18L18 6M6 6l12 12"
+              />
             </svg>
           </button>
         </div>
@@ -69,7 +77,10 @@ onUnmounted(() => {
         </div>
 
         <!-- Footer -->
-        <div v-if="$slots.footer" class="px-6 py-3.5 bg-slate-50 dark:bg-slate-800/80 border-t border-slate-200 dark:border-slate-700 flex items-center justify-end gap-3">
+        <div
+          v-if="$slots.footer"
+          class="px-6 py-3.5 bg-slate-50 dark:bg-slate-800/80 border-t border-slate-200 dark:border-slate-700 flex items-center justify-end gap-3"
+        >
           <slot name="footer"></slot>
         </div>
       </div>

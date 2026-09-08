@@ -1,126 +1,128 @@
 <script setup lang="ts">
-import { ref, watch, computed } from 'vue'
-import type { config } from 'wailsjs/go/models'
-import Modal from '@/components/Modal.vue'
+import { ref, watch, computed } from "vue";
+import type { config } from "wailsjs/go/models";
+import Modal from "@/components/Modal.vue";
 
 const props = defineProps<{
-  isOpen: boolean
-  rule: config.ClassificationRule | null
-  editIndex: number
-  labels: config.LabelDefinition[]
-}>()
+  isOpen: boolean;
+  rule: config.ClassificationRule | null;
+  editIndex: number;
+  labels: config.LabelDefinition[];
+}>();
 
 const emit = defineEmits<{
-  (e: 'close'): void
+  (e: "close"): void;
   (
-    e: 'save',
+    e: "save",
     payload: {
-      rule: Partial<config.ClassificationRule> & { pattern: string; label: string }
-      editIndex: number
-      customLabel?: config.LabelDefinition
-    }
-  ): void
-}>()
+      rule: Partial<config.ClassificationRule> & { pattern: string; label: string };
+      editIndex: number;
+      customLabel?: config.LabelDefinition;
+    },
+  ): void;
+}>();
 
-const isNew = computed(() => props.editIndex < 0 || !props.rule)
-const modalTitle = computed(() => (isNew.value ? 'Add Classification Rule' : `Edit Rule #${props.editIndex + 1}`))
+const isNew = computed(() => props.editIndex < 0 || !props.rule);
+const modalTitle = computed(() =>
+  isNew.value ? "Add Classification Rule" : `Edit Rule #${props.editIndex + 1}`,
+);
 
-const pattern = ref('')
-const matchType = ref<'substring' | 'regex'>('substring')
-const targetLabel = ref('')
-const description = ref('')
-const enabled = ref(true)
+const pattern = ref("");
+const matchType = ref<"substring" | "regex">("substring");
+const targetLabel = ref("");
+const description = ref("");
+const enabled = ref(true);
 
 // Custom Label Definition
-const isAddingCustomLabel = ref(false)
-const customKey = ref('')
-const customDisplayName = ref('')
-const customMetric = ref<'none' | 'trash' | 'recycling' | 'both'>('none')
+const isAddingCustomLabel = ref(false);
+const customKey = ref("");
+const customDisplayName = ref("");
+const customMetric = ref<"none" | "trash" | "recycling" | "both">("none");
 
-const errorMessage = ref<string | null>(null)
+const errorMessage = ref<string | null>(null);
 
 watch(
   () => props.isOpen,
   (open) => {
     if (open) {
-      errorMessage.value = null
-      isAddingCustomLabel.value = false
-      customKey.value = ''
-      customDisplayName.value = ''
-      customMetric.value = 'none'
+      errorMessage.value = null;
+      isAddingCustomLabel.value = false;
+      customKey.value = "";
+      customDisplayName.value = "";
+      customMetric.value = "none";
 
       if (props.rule && props.editIndex >= 0) {
-        pattern.value = props.rule.pattern
-        matchType.value = (props.rule.type as 'substring' | 'regex') || 'substring'
-        targetLabel.value = props.rule.label
-        description.value = props.rule.description || ''
-        enabled.value = props.rule.enabled
+        pattern.value = props.rule.pattern;
+        matchType.value = (props.rule.type as "substring" | "regex") || "substring";
+        targetLabel.value = props.rule.label;
+        description.value = props.rule.description || "";
+        enabled.value = props.rule.enabled;
       } else {
-        pattern.value = ''
-        matchType.value = 'substring'
-        targetLabel.value = props.labels.length > 0 ? props.labels[0].key : ''
-        description.value = ''
-        enabled.value = true
+        pattern.value = "";
+        matchType.value = "substring";
+        targetLabel.value = props.labels.length > 0 ? props.labels[0].key : "";
+        description.value = "";
+        enabled.value = true;
       }
     }
   },
-  { immediate: true }
-)
+  { immediate: true },
+);
 
 function onTargetLabelChange(val: string) {
-  if (val === '__ADD_NEW__') {
-    isAddingCustomLabel.value = true
-    targetLabel.value = '__ADD_NEW__'
+  if (val === "__ADD_NEW__") {
+    isAddingCustomLabel.value = true;
+    targetLabel.value = "__ADD_NEW__";
   } else {
-    isAddingCustomLabel.value = false
-    targetLabel.value = val
+    isAddingCustomLabel.value = false;
+    targetLabel.value = val;
   }
 }
 
 function handleSave() {
-  errorMessage.value = null
-  let pat = pattern.value.trim()
+  errorMessage.value = null;
+  let pat = pattern.value.trim();
 
   if (!pat) {
-    errorMessage.value = 'Rule pattern cannot be empty'
-    return
+    errorMessage.value = "Rule pattern cannot be empty";
+    return;
   }
 
-  if (matchType.value === 'substring') {
-    pat = pat.toUpperCase()
-  } else if (matchType.value === 'regex') {
+  if (matchType.value === "substring") {
+    pat = pat.toUpperCase();
+  } else if (matchType.value === "regex") {
     try {
-      new RegExp(pat)
+      new RegExp(pat);
     } catch (e: unknown) {
-      errorMessage.value = `Invalid regex pattern: ${e instanceof Error ? e.message : String(e)}`
-      return
+      errorMessage.value = `Invalid regex pattern: ${e instanceof Error ? e.message : String(e)}`;
+      return;
     }
   }
 
-  let finalLabel = targetLabel.value
-  let customDef: config.LabelDefinition | undefined
+  let finalLabel = targetLabel.value;
+  let customDef: config.LabelDefinition | undefined;
 
-  if (isAddingCustomLabel.value || targetLabel.value === '__ADD_NEW__') {
-    const key = customKey.value.trim()
+  if (isAddingCustomLabel.value || targetLabel.value === "__ADD_NEW__") {
+    const key = customKey.value.trim();
     if (!key) {
-      errorMessage.value = 'New label key cannot be empty'
-      return
+      errorMessage.value = "New label key cannot be empty";
+      return;
     }
-    const displayName = customDisplayName.value.trim() || key
+    const displayName = customDisplayName.value.trim() || key;
     customDef = {
       key,
       display_name: displayName,
       metric: customMetric.value,
-    } as config.LabelDefinition
-    finalLabel = key
+    } as config.LabelDefinition;
+    finalLabel = key;
   }
 
   if (!finalLabel) {
-    errorMessage.value = 'Target label must be selected'
-    return
+    errorMessage.value = "Target label must be selected";
+    return;
   }
 
-  emit('save', {
+  emit("save", {
     rule: {
       id: props.rule?.id,
       pattern: pat,
@@ -131,22 +133,20 @@ function handleSave() {
     },
     editIndex: props.editIndex,
     customLabel: customDef,
-  })
+  });
 
-  emit('close')
+  emit("close");
 }
 </script>
 
 <template>
-  <Modal
-    :is-open="isOpen"
-    :title="modalTitle"
-    max-width-class="max-w-lg"
-    @close="emit('close')"
-  >
+  <Modal :is-open="isOpen" :title="modalTitle" max-width-class="max-w-lg" @close="emit('close')">
     <form @submit.prevent="handleSave" class="space-y-4 text-xs select-none">
       <!-- Error Alert -->
-      <div v-if="errorMessage" class="p-2.5 rounded-lg bg-red-50 dark:bg-red-950/60 border border-red-300 dark:border-red-800 text-red-800 dark:text-red-200">
+      <div
+        v-if="errorMessage"
+        class="p-2.5 rounded-lg bg-red-50 dark:bg-red-950/60 border border-red-300 dark:border-red-800 text-red-800 dark:text-red-200"
+      >
         {{ errorMessage }}
       </div>
 
@@ -166,9 +166,7 @@ function handleSave() {
 
       <!-- Match Type -->
       <div>
-        <label class="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-          Match Type:
-        </label>
+        <label class="block font-bold text-slate-700 dark:text-slate-300 mb-1"> Match Type: </label>
         <select
           v-model="matchType"
           class="w-full px-3 py-2 text-xs rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-700 text-slate-900 dark:text-slate-100 focus:outline-hidden focus:ring-2 focus:ring-truck-500 cursor-pointer"
@@ -191,9 +189,7 @@ function handleSave() {
           <option v-for="l in labels" :key="l.key" :value="l.key">
             {{ l.key }} ({{ l.display_name }})
           </option>
-          <option value="__ADD_NEW__">
-            [+ Add New Label…]
-          </option>
+          <option value="__ADD_NEW__">[+ Add New Label…]</option>
         </select>
       </div>
 
@@ -202,9 +198,7 @@ function handleSave() {
         v-if="isAddingCustomLabel"
         class="p-3.5 rounded-lg border border-truck-300 dark:border-truck-800 bg-truck-50/60 dark:bg-truck-950/30 space-y-3"
       >
-        <h4 class="font-bold text-truck-800 dark:text-truck-300 text-xs">
-          New Label Definition:
-        </h4>
+        <h4 class="font-bold text-truck-800 dark:text-truck-300 text-xs">New Label Definition:</h4>
 
         <div>
           <label class="block text-slate-600 dark:text-slate-400 mb-1">
@@ -219,9 +213,7 @@ function handleSave() {
         </div>
 
         <div>
-          <label class="block text-slate-600 dark:text-slate-400 mb-1">
-            Display Name:
-          </label>
+          <label class="block text-slate-600 dark:text-slate-400 mb-1"> Display Name: </label>
           <input
             v-model="customDisplayName"
             type="text"
@@ -267,7 +259,10 @@ function handleSave() {
           type="checkbox"
           class="w-4 h-4 rounded text-truck-500 focus:ring-truck-500 border-slate-300 dark:border-slate-600 cursor-pointer"
         />
-        <label for="rule-enabled-checkbox" class="font-bold text-slate-700 dark:text-slate-300 cursor-pointer">
+        <label
+          for="rule-enabled-checkbox"
+          class="font-bold text-slate-700 dark:text-slate-300 cursor-pointer"
+        >
           Rule Enabled
         </label>
       </div>

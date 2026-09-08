@@ -7,16 +7,17 @@ describe("Design System & Theme Tokens", () => {
   const styleCss = readFileSync(styleCssPath, "utf-8");
 
   it("defines all required color tokens from Fyne customTheme", () => {
-    expect(styleCss).toContain("--color-truck-500: #6CB944");
-    expect(styleCss).toContain("--color-truck-600: #559B32");
-    expect(styleCss).toContain("--color-truck-100: #E8F7DC");
-    expect(styleCss).toContain("--color-truck-200: #DCF5C3");
-    expect(styleCss).toContain("--color-truck-btn: #DCEDD2");
-    expect(styleCss).toContain("--color-truck-input: #F1F8ED");
-    expect(styleCss).toContain("--color-slate-900: #0F172A");
-    expect(styleCss).toContain("--color-slate-800: #1E293B");
-    expect(styleCss).toContain("--color-slate-50: #F8FAFC");
-    expect(styleCss).toContain("--color-truck-selection: rgba(108, 185, 68, 0.31)");
+    const lowerCss = styleCss.toLowerCase();
+    expect(lowerCss).toContain("--color-truck-500: #6cb944");
+    expect(lowerCss).toContain("--color-truck-600: #559b32");
+    expect(lowerCss).toContain("--color-truck-100: #e8f7dc");
+    expect(lowerCss).toContain("--color-truck-200: #dcf5c3");
+    expect(lowerCss).toContain("--color-truck-btn: #dcedd2");
+    expect(lowerCss).toContain("--color-truck-input: #f1f8ed");
+    expect(lowerCss).toContain("--color-slate-900: #0f172a");
+    expect(lowerCss).toContain("--color-slate-800: #1e293b");
+    expect(lowerCss).toContain("--color-slate-50: #f8fafc");
+    expect(lowerCss).toContain("--color-truck-selection: rgba(108, 185, 68, 0.31)");
   });
 
   it("defines typography scale tokens matching Fyne header sizes", () => {

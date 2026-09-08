@@ -51,6 +51,7 @@ var CSVHeaders = []string{
 	"label",
 	"issue_time",
 }
+
 // ToRow converts a Record into a CSV row string slice.
 func (rec Record) ToRow() []string {
 	return []string{

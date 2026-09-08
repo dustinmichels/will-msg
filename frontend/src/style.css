@@ -3,15 +3,15 @@
 @custom-variant dark (&:where(.dark, .dark *), @media (prefers-color-scheme: dark));
 
 @theme {
-  --color-truck-500: #6CB944;
-  --color-truck-600: #559B32;
-  --color-truck-100: #E8F7DC;
-  --color-truck-200: #DCF5C3;
-  --color-truck-btn: #DCEDD2;
-  --color-truck-input: #F1F8ED;
-  --color-slate-900: #0F172A;
-  --color-slate-800: #1E293B;
-  --color-slate-50: #F8FAFC;
+  --color-truck-500: #6cb944;
+  --color-truck-600: #559b32;
+  --color-truck-100: #e8f7dc;
+  --color-truck-200: #dcf5c3;
+  --color-truck-btn: #dcedd2;
+  --color-truck-input: #f1f8ed;
+  --color-slate-900: #0f172a;
+  --color-slate-800: #1e293b;
+  --color-slate-50: #f8fafc;
   --color-truck-selection: rgba(108, 185, 68, 0.31);
 
   --text-title: 18px;

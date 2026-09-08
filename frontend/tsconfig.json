@@ -10,22 +10,13 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "esModuleInterop": true,
-    "lib": [
-      "ESNext",
-      "DOM"
-    ],
+    "lib": ["ESNext", "DOM"],
     "skipLibCheck": true,
-    "types": [
-      "bun"
-    ],
+    "types": ["bun"],
     "baseUrl": ".",
     "paths": {
-      "@/*": [
-        "src/*"
-      ],
-      "wailsjs/*": [
-        "wailsjs/*"
-      ]
+      "@/*": ["src/*"],
+      "wailsjs/*": ["wailsjs/*"]
     }
   },
   "include": [

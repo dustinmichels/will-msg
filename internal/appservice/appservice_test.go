@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,7 +16,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"will-msg/internal/appservice"
 	"will-msg/internal/config"

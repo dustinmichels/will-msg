@@ -13,9 +13,19 @@ go test -race ./...
 (cd frontend && bun test)
 """
 
+[tasks.fmt]
+description = "Format Go backend and frontend code"
+run = """
+go fmt ./...
+(cd frontend && bun run fmt)
+"""
+
 [tasks.build]
 description = "Build and package binaries for macOS and Windows"
-depends = ["build-darwin", "build-windows"]
+run = """
+mise run build-darwin
+mise run build-windows
+"""
 
 [tasks.build-darwin]
 description = "Build and package macOS binaries (separate arm64 and amd64 bundles + zips)"

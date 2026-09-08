@@ -112,8 +112,8 @@ func TestFindSources_Folder_WithIgnored(t *testing.T) {
 	}
 
 	expectedDisplayNames := map[string]bool{
-		"file1.msg":                     false,
-		"file2.MSG":                     false,
+		"file1.msg":                             false,
+		"file2.MSG":                             false,
 		filepath.Join("subfolder", "file3.msg"): false,
 	}
 
@@ -134,11 +134,11 @@ func TestFindSources_Folder_WithIgnored(t *testing.T) {
 
 func TestFindSources_Zip(t *testing.T) {
 	zipFiles := map[string][]byte{
-		"test1.msg":              []byte("dummy msg 1"),
-		"nested/test2.msg":       []byte("dummy msg 2"),
-		"nested/.hidden.msg":     []byte("dummy hidden msg"),
-		"__MACOSX/._test1.msg":   []byte("dummy macosx"),
-		"notes.txt":              []byte("dummy notes"),
+		"test1.msg":            []byte("dummy msg 1"),
+		"nested/test2.msg":     []byte("dummy msg 2"),
+		"nested/.hidden.msg":   []byte("dummy hidden msg"),
+		"__MACOSX/._test1.msg": []byte("dummy macosx"),
+		"notes.txt":            []byte("dummy notes"),
 	}
 
 	zipPath := createTestZip(t, zipFiles)
