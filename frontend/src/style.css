@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *), @media (prefers-color-scheme: dark));
+
+@theme {
+  --color-truck-500: #6CB944;
+  --color-truck-600: #559B32;
+  --color-truck-100: #E8F7DC;
+  --color-truck-200: #DCF5C3;
+  --color-truck-btn: #DCEDD2;
+  --color-truck-input: #F1F8ED;
+  --color-slate-900: #0F172A;
+  --color-slate-800: #1E293B;
+  --color-slate-50: #F8FAFC;
+  --color-truck-selection: rgba(108, 185, 68, 0.31);
+
+  --text-title: 18px;
+  --text-subtitle: 13px;
+  --text-welcome: 28px;
+}
+
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  @apply bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-50;
+  min-height: 100vh;
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Tabular numbers for CSV table and data displays */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Reduced motion override for all transitions/animations */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

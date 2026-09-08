@@ -1,0 +1,128 @@
+name: CI & Build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  test-and-build:
+    name: Build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: darwin
+          - os: windows-latest
+            platform: windows
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.x'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.0'
+
+      - name: Install Wails CLI v2.15.0
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.15.0
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+        working-directory: frontend
+
+      - name: Run Go tests
+        run: go test -race -v ./...
+
+      - name: Run Frontend tests
+        run: bun test
+        working-directory: frontend
+
+      - name: Build macOS binaries
+        if: matrix.platform == 'darwin'
+        run: |
+          wails build -platform darwin/arm64,darwin/amd64 -clean
+          mkdir -p bin
+          rm -rf bin/will-msg-macos-arm64.app bin/will-msg-macos-amd64.app bin/will-msg-macos-arm64.zip bin/will-msg-macos-amd64.zip
+          cp -R build/bin/will-msg-arm64.app bin/will-msg-macos-arm64.app
+          cp -R build/bin/will-msg-amd64.app bin/will-msg-macos-amd64.app
+          ditto -c -k --sequesterRsrc --keepParent bin/will-msg-macos-arm64.app bin/will-msg-macos-arm64.zip
+          ditto -c -k --sequesterRsrc --keepParent bin/will-msg-macos-amd64.app bin/will-msg-macos-amd64.zip
+          
+          # Verify metadata and architectures
+          test -d bin/will-msg-macos-arm64.app || exit 1
+          test -d bin/will-msg-macos-amd64.app || exit 1
+          test -s bin/will-msg-macos-arm64.zip || exit 1
+          test -s bin/will-msg-macos-amd64.zip || exit 1
+          
+          file bin/will-msg-macos-arm64.app/Contents/MacOS/will-msg | grep -q arm64
+          file bin/will-msg-macos-amd64.app/Contents/MacOS/will-msg | grep -q x86_64
+          defaults read "$(pwd)/bin/will-msg-macos-arm64.app/Contents/Info.plist" CFBundleIdentifier | grep -q "io.github.dustinmichels.willmsg"
+
+      - name: Build Windows binary
+        if: matrix.platform == 'windows'
+        shell: bash
+        run: |
+          wails build -platform windows/amd64 -clean -webview2 embed
+          mkdir -p bin
+          rm -f bin/will-msg-windows-amd64.exe bin/will-msg-windows-amd64.zip
+          cp build/bin/will-msg.exe bin/will-msg-windows-amd64.exe
+          (
+            cd bin
+            if command -v zip >/dev/null 2>&1; then
+              zip -q will-msg-windows-amd64.zip will-msg-windows-amd64.exe
+            elif command -v powershell.exe >/dev/null 2>&1; then
+              powershell.exe -NoProfile -Command "Compress-Archive -Path will-msg-windows-amd64.exe -DestinationPath will-msg-windows-amd64.zip -Force"
+            elif command -v pwsh >/dev/null 2>&1; then
+              pwsh -NoProfile -Command "Compress-Archive -Path will-msg-windows-amd64.exe -DestinationPath will-msg-windows-amd64.zip -Force"
+            fi
+          )
+          test -s bin/will-msg-windows-amd64.exe || exit 1
+          test -s bin/will-msg-windows-amd64.zip || exit 1
+
+      - name: Windows smoke check (launch binary)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $proc = Start-Process -FilePath "bin/will-msg-windows-amd64.exe" -PassThru
+          Start-Sleep -Seconds 2
+          if ($proc.HasExited -and $proc.ExitCode -ne 0) {
+            Write-Error "Windows binary exited unexpectedly with code $($proc.ExitCode)"
+            exit 1
+          }
+          if (-not $proc.HasExited) {
+            Stop-Process -Id $proc.Id -Force
+          }
+          Write-Host "Windows smoke check succeeded."
+
+      - name: Upload macOS Artifacts
+        if: matrix.platform == 'darwin'
+        uses: actions/upload-artifact@v4
+        with:
+          name: will-msg-macos
+          path: |
+            bin/will-msg-macos-arm64.zip
+            bin/will-msg-macos-amd64.zip
+          if-no-files-found: error
+
+      - name: Upload Windows Artifacts
+        if: matrix.platform == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: will-msg-windows
+          path: |
+            bin/will-msg-windows-amd64.exe
+            bin/will-msg-windows-amd64.zip
+          if-no-files-found: error

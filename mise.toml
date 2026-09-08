@@ -1,0 +1,76 @@
+[tools]
+go = "1.27.1"
+bun = "1.4.0"
+
+[tasks.dev]
+description = "Run Wails live development mode"
+run = "wails dev"
+
+[tasks.test]
+description = "Run Go backend tests and Bun frontend tests"
+run = """
+go test -race ./...
+(cd frontend && bun test)
+"""
+
+[tasks.build]
+description = "Build and package binaries for macOS and Windows"
+depends = ["build-darwin", "build-windows"]
+
+[tasks.build-darwin]
+description = "Build and package macOS binaries (separate arm64 and amd64 bundles + zips)"
+run = """
+wails build -platform darwin/arm64,darwin/amd64 -clean
+mkdir -p bin
+rm -rf bin/will-msg-macos-arm64.app bin/will-msg-macos-amd64.app bin/will-msg-macos-arm64.zip bin/will-msg-macos-amd64.zip
+cp -R build/bin/will-msg-arm64.app bin/will-msg-macos-arm64.app
+cp -R build/bin/will-msg-amd64.app bin/will-msg-macos-amd64.app
+ditto -c -k --sequesterRsrc --keepParent bin/will-msg-macos-arm64.app bin/will-msg-macos-arm64.zip
+ditto -c -k --sequesterRsrc --keepParent bin/will-msg-macos-amd64.app bin/will-msg-macos-amd64.zip
+
+test -d bin/will-msg-macos-arm64.app || { echo "Missing bin/will-msg-macos-arm64.app"; exit 1; }
+test -d bin/will-msg-macos-amd64.app || { echo "Missing bin/will-msg-macos-amd64.app"; exit 1; }
+test -s bin/will-msg-macos-arm64.zip || { echo "Missing or empty bin/will-msg-macos-arm64.zip"; exit 1; }
+test -s bin/will-msg-macos-amd64.zip || { echo "Missing or empty bin/will-msg-macos-amd64.zip"; exit 1; }
+"""
+
+[tasks.build-windows]
+description = "Build and package Windows binary (amd64 .exe + zip)"
+run = """
+wails build -platform windows/amd64 -clean -webview2 embed
+mkdir -p bin
+rm -f bin/will-msg-windows-amd64.exe bin/will-msg-windows-amd64.zip
+cp build/bin/will-msg.exe bin/will-msg-windows-amd64.exe
+(
+  cd bin
+  if command -v zip >/dev/null 2>&1; then
+    zip -q will-msg-windows-amd64.zip will-msg-windows-amd64.exe
+  elif command -v powershell.exe >/dev/null 2>&1; then
+    powershell.exe -NoProfile -Command "Compress-Archive -Path will-msg-windows-amd64.exe -DestinationPath will-msg-windows-amd64.zip -Force"
+  elif command -v pwsh >/dev/null 2>&1; then
+    pwsh -NoProfile -Command "Compress-Archive -Path will-msg-windows-amd64.exe -DestinationPath will-msg-windows-amd64.zip -Force"
+  else
+    tar -a -c -f will-msg-windows-amd64.zip will-msg-windows-amd64.exe
+  fi
+)
+
+test -s bin/will-msg-windows-amd64.exe || { echo "Missing or empty bin/will-msg-windows-amd64.exe"; exit 1; }
+test -s bin/will-msg-windows-amd64.zip || { echo "Missing or empty bin/will-msg-windows-amd64.zip"; exit 1; }
+"""
+
+[tasks.parse]
+description = "Parse a message file from data-new or specified path"
+run = '''
+#!/usr/bin/env bash
+if [ -z "$1" ]; then
+  echo "Usage: mise run parse <msg_file_name_or_path>"
+  exit 1
+fi
+file="$1"
+if [ ! -f "$file" ] && [ -f "data-new/$file" ]; then
+  file="data-new/$file"
+elif [[ ! "$file" =~ ^data-new/ ]] && [ ! -f "$file" ]; then
+  file="data-new/$file"
+fi
+go run ./cmd/msgcat "$file"
+'''
